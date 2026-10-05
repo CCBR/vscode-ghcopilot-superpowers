@@ -63,7 +63,7 @@ mkdir "$repo/.github/skills/debugging"
 reject "$repo" 'Conflicts'
 [[ -d $repo/.github/skills/debugging && ! -L $repo/.github/skills/debugging ]]
 assert_same "$repo/AGENTS.md" "$tmp/agents-original"
- rmdir "$repo/.github/skills/debugging"
+rmdir "$repo/.github/skills/debugging"
 ln -s "$tmp/missing" "$repo/.github/skills/debugging"
 reject "$repo" 'broken or unexpected symlink'
 [[ -L $repo/.github/skills/debugging ]]
@@ -80,6 +80,30 @@ reject "$repo" 'incomplete, repeated, or out-of-order'
 cp "$tmp/agents-original" "$repo/AGENTS.md"
 
 git -C "$tmp" init -q clean
-run "$tmp/clean" > "$tmp/out"
+(
+  cd "$tmp/clean"
+  "$installer" > "$tmp/out"
+)
 [[ -L $tmp/clean/.github/skills/brainstorming && -f $tmp/clean/AGENTS.md ]]
+
+git -C "$tmp" init -q blocked
+mkdir -p "$tmp/blocked/.github"
+echo 'not a directory' > "$tmp/blocked/.github/skills"
+reject "$tmp/blocked" 'Expected an ordinary directory'
+[[ ! -e $tmp/blocked/AGENTS.md ]]
+
+git -C "$tmp" init -q linked
+ln -s "$repo/AGENTS.md" "$tmp/linked/AGENTS.md"
+reject "$tmp/linked" 'not a symlink'
+[[ -L $tmp/linked/AGENTS.md ]]
+
+git -C "$tmp" init -q empty
+mkdir -p "$tmp/empty-shared/skills/bad"
+printf '%s\n' '---' 'name: other' 'description: wrong name' '---' > "$tmp/empty-shared/skills/bad/SKILL.md"
+if (cd "$tmp/empty" && CCBR_SUPERPOWERS_ROOT="$tmp/empty-shared" bash "$installer") > "$tmp/out" 2>&1; then
+  echo 'Expected failure with no valid skills' >&2
+  exit 1
+fi
+grep -Fq 'No valid skills' "$tmp/out"
+[[ ! -e $tmp/empty/AGENTS.md && ! -e $tmp/empty/.github ]]
 printf 'All installer tests passed.\n'
