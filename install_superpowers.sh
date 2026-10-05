@@ -13,10 +13,12 @@ case "$repo/" in
     fail 'Refusing to configure a shared CCBR checkout.' ;;
 esac
 [[ -d $shared && -r $shared && -x $shared ]] || fail "Shared Superpowers installation is missing or unreadable: $shared"
+if [[ $shared != /* ]]; then shared=$(cd "$shared" && pwd -P); fi
 skills=$shared/skills
 [[ -d $skills && -r $skills && -x $skills ]] || fail "Shared skills directory is missing or unreadable: $skills"
 
 agents=$repo/AGENTS.md
+has_policy=0
 for path in "$repo/.github" "$repo/.github/skills"; do
   if [[ -e $path || -L $path ]]; then
     [[ -d $path && ! -L $path ]] || fail "Expected an ordinary directory, not a conflicting entry: $path"
@@ -24,11 +26,12 @@ for path in "$repo/.github" "$repo/.github/skills"; do
 done
 if [[ -e $agents || -L $agents ]]; then
   [[ -f $agents && ! -L $agents && -r $agents ]] || fail "AGENTS.md must be a readable regular file (not a symlink): $agents"
-  awk -v s="$start" -v e="$end" '
-    $0 == s { a++; if (a != 1 || b) exit 1 }
-    $0 == e { b++; if (b != 1 || a != 1) exit 1 }
-    END { if (a != b || a > 1 || b > 1) exit 1 }
-  ' "$agents" || fail 'AGENTS.md has incomplete, repeated, or out-of-order CCBR markers; resolve manually.'
+  has_policy=$(awk -v s="$start" -v e="$end" '
+    { line=$0; sub(/\r$/, "", line) }
+    line == s { a++; if (a != 1 || b) exit 1 }
+    line == e { b++; if (b != 1 || a != 1) exit 1 }
+    END { if (a != b || a > 1 || b > 1) exit 1; print a+0 }
+  ' "$agents") || fail 'AGENTS.md has incomplete, repeated, or out-of-order CCBR markers; resolve manually.'
 fi
 
 shopt -s nullglob
@@ -174,10 +177,11 @@ POLICY
 
 output=$(mktemp "$repo/.AGENTS.md.XXXXXX") || fail 'Cannot create temporary AGENTS.md.'
 if [[ -f $agents ]]; then
-  if grep -Fxq "$start" "$agents"; then
+  if ((has_policy)); then
     awk -v s="$start" -v e="$end" -v policy="$policy" '
-      $0 == s { while ((getline line < policy) > 0) print line; inside=1; next }
-      $0 == e { inside=0; next }
+      { marker=$0; sub(/\r$/, "", marker) }
+      marker == s { while ((getline line < policy) > 0) print line; inside=1; next }
+      marker == e { inside=0; next }
       !inside { print }
     ' "$agents" > "$output"
   else

@@ -52,6 +52,8 @@ run "$repo" > "$tmp/out"
 grep -Fq '0 created, 1 already correct' "$tmp/out"
 assert_same "$repo/AGENTS.md" "$tmp/agents-original"
 [[ $(grep -Fc '<!-- CCBR-SUPERPOWERS-START -->' "$repo/AGENTS.md") -eq 1 ]]
+(cd "$repo" && CCBR_SUPERPOWERS_ROOT=../shared bash "$installer" > "$tmp/out")
+[[ $(readlink "$repo/.github/skills/brainstorming") == "$CCBR_SUPERPOWERS_ROOT/skills/brainstorming" ]]
 
 sed -i '/Superpowers is an optional workflow framework/c\OLD POLICY' "$repo/AGENTS.md"
 run "$repo" > "$tmp/out"
@@ -106,4 +108,17 @@ if (cd "$tmp/empty" && CCBR_SUPERPOWERS_ROOT="$tmp/empty-shared" bash "$installe
 fi
 grep -Fq 'No valid skills' "$tmp/out"
 [[ ! -e $tmp/empty/AGENTS.md && ! -e $tmp/empty/.github ]]
+
+git -C "$tmp" init -q crlf
+printf 'before\r\n%s\r\nold policy\r\n%s\r\nafter\r\n' \
+  '<!-- CCBR-SUPERPOWERS-START -->' '<!-- CCBR-SUPERPOWERS-END -->' > "$tmp/crlf/AGENTS.md"
+run "$tmp/crlf" > "$tmp/out"
+[[ $(grep -Fc '<!-- CCBR-SUPERPOWERS-START -->' "$tmp/crlf/AGENTS.md") -eq 1 ]]
+grep -Fq 'Superpowers is an optional workflow framework' "$tmp/crlf/AGENTS.md"
+! grep -Fq 'old policy' "$tmp/crlf/AGENTS.md"
+grep -Fq $'before\r' "$tmp/crlf/AGENTS.md"
+grep -Fq $'after\r' "$tmp/crlf/AGENTS.md"
+cp "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
+run "$tmp/crlf" > "$tmp/out"
+assert_same "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
 printf 'All installer tests passed.\n'
