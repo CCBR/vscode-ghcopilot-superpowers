@@ -121,4 +121,12 @@ grep -Fq $'after\r' "$tmp/crlf/AGENTS.md"
 cp "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
 run "$tmp/crlf" > "$tmp/out"
 assert_same "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
+
+printf 'before\n%s\nold policy\n%s\nafter without newline' \
+  '<!-- CCBR-SUPERPOWERS-START -->' '<!-- CCBR-SUPERPOWERS-END -->' > "$tmp/crlf/AGENTS.md"
+run "$tmp/crlf" > "$tmp/out"
+[[ $(tail -c 21 "$tmp/crlf/AGENTS.md") == 'after without newline' ]]
+cp "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
+run "$tmp/crlf" > "$tmp/out"
+assert_same "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
 printf 'All installer tests passed.\n'

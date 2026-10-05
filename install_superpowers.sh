@@ -178,12 +178,27 @@ POLICY
 output=$(mktemp "$repo/.AGENTS.md.XXXXXX") || fail 'Cannot create temporary AGENTS.md.'
 if [[ -f $agents ]]; then
   if ((has_policy)); then
-    awk -v s="$start" -v e="$end" -v policy="$policy" '
-      { marker=$0; sub(/\r$/, "", marker) }
-      marker == s { while ((getline line < policy) > 0) print line; inside=1; next }
-      marker == e { inside=0; next }
-      !inside { print }
-    ' "$agents" > "$output"
+    inside=0
+    while :; do
+      line=
+      if IFS= read -r line; then
+        newline=1
+      elif [[ -n $line ]]; then
+        newline=0
+      else
+        break
+      fi
+      marker=${line%$'\r'}
+      if [[ $marker == "$start" ]]; then
+        cat "$policy" >> "$output"
+        inside=1
+      elif [[ $marker == "$end" ]]; then
+        inside=0
+      elif (( !inside )); then
+        printf '%s' "$line" >> "$output"
+        if ((newline)); then printf '\n' >> "$output"; fi
+      fi
+    done < "$agents"
   else
     cat "$agents" > "$output"
     if [[ -s $agents && $(tail -c 1 "$agents" | wc -l) -eq 0 ]]; then printf '\n' >> "$output"; fi
