@@ -13,7 +13,9 @@ manifest=$install_root/.ccbr-superpowers-managed
 replace_conflicts=0
 show_status=0
 list_versions=0
+show_verify=0
 configure_repo=1
+version_requested=0
 start='<!-- CCBR-SUPERPOWERS-START -->'
 end='<!-- CCBR-SUPERPOWERS-END -->'
 temporary_paths=()
@@ -41,6 +43,7 @@ Options:
   -v, --version TAG       Install an exact upstream tag (default: v6.4.2)
       --status            Report the installed version and managed skills
       --list-versions     List available upstream versions without making changes
+      --verify            Verify installation and policy health without making changes
       --replace-conflicts Back up conflicting files/directories without prompting
       --no-agents-policy  Do not update AGENTS.md with the CCBR policy
   -h, --help              Show this help
@@ -56,6 +59,7 @@ while (($#)); do
     -v|--version)
       (($# >= 2)) || fail "$1 requires a tag."
       version=$2
+      version_requested=1
       shift 2
       ;;
     --status)
@@ -64,6 +68,10 @@ while (($#)); do
       ;;
     --list-versions)
       list_versions=1
+      shift
+      ;;
+    --verify)
+      show_verify=1
       shift
       ;;
     --replace-conflicts)
@@ -87,6 +95,9 @@ while (($#)); do
 done
 (($# == 0)) || fail "Unexpected argument: $1"
 ((!show_status || !list_versions)) || fail '--status and --list-versions cannot be used together.'
+if ((show_verify && (show_status || list_versions || version_requested || replace_conflicts))); then
+  fail '--verify cannot be combined with --status, --list-versions, --version, or --replace-conflicts.'
+fi
 
 command -v git >/dev/null 2>&1 || fail 'Git is required.'
 repo=$(git rev-parse --show-toplevel 2>/dev/null) || fail 'Run this installer inside a Git working tree.'
@@ -195,6 +206,230 @@ expected_remote() {
   esac
 }
 
+skill_frontmatter_status() {
+  local expected=$1 file=$2
+  awk -v name="$expected" '
+    { line=$0; sub(/\r$/, "", line) }
+    NR == 1 { if (line != "---") malformed=1; next }
+    line == "---" { closed=1; exit }
+    /^name: / { found_name = (substr(line, 7) == name) }
+    /^description: / { found_description = (length(line) > 13) }
+    END {
+      if (!found_name) exit 2
+      if (malformed || !closed || !found_description) exit 3
+    }
+  ' "$file"
+}
+
+verify_installation() {
+  local healthy=0 warnings=0 errors=0 current commit origin dirty manifest_version='' line name target value
+  local marker_count active_count=0 manifest_count=0 frontmatter_status
+  local -a active_skills=() managed_skills=()
+
+  verify_ok() { printf 'OK: %s\n' "$*"; ((healthy+=1)); }
+  verify_warning() { printf 'WARNING: %s\n' "$*"; ((warnings+=1)); }
+  verify_error() { printf 'ERROR: %s\n' "$*"; ((errors+=1)); }
+  repair() { printf '  Repair: %s\n' "$*"; }
+  list_contains() {
+    local wanted=$1 candidate
+    shift
+    for candidate in "$@"; do [[ $candidate == "$wanted" ]] && return 0; done
+    return 1
+  }
+  valid_skill_name() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
+  if [[ ! -d $checkout/.git ]]; then
+    verify_error "Superpowers checkout is missing or is not a Git repository: $checkout."
+    repair 'rerun the installer to create a verified checkout.'
+  else
+    if current=$(installed_version); then
+      verify_ok "Installed version: $current"
+    else
+      verify_error 'Checkout is not at an exact version tag.'
+      repair 'rerun the installer with --version TAG.'
+    fi
+    if commit=$(git -C "$checkout" rev-parse HEAD 2>/dev/null); then
+      verify_ok "Checkout commit: $commit"
+    else
+      verify_error 'Checkout commit could not be read.'
+      repair "back up changes, delete $checkout, and rerun the installer."
+    fi
+    origin=$(git -C "$checkout" config --get remote.origin.url || true)
+    if expected_remote "$origin"; then
+      verify_ok "Checkout origin: $origin"
+    else
+      verify_error "Checkout origin is unexpected: ${origin:-none}."
+      repair "back up changes, delete $checkout, and rerun the installer."
+    fi
+    dirty=$(GIT_OPTIONAL_LOCKS=0 git -C "$checkout" status --porcelain --untracked-files=all 2>/dev/null || printf 'unreadable')
+    if [[ -z $dirty ]]; then
+      verify_ok 'Checkout has no local changes.'
+    else
+      verify_error 'Checkout has local changes.'
+      repair "back up changes, delete $checkout, and rerun the installer."
+    fi
+
+    shopt -s nullglob
+    for target in "$checkout/skills"/*; do
+      [[ -d $target && ! -L $target ]] || continue
+      name=${target##*/}
+      active_skills+=("$name")
+      ((active_count+=1))
+      if [[ ! -f $target/SKILL.md || ! -r $target/SKILL.md ]]; then
+        verify_error "Skill is missing a readable SKILL.md: $name."
+        repair 'back up changes, delete the checkout, and rerun the installer.'
+      else
+        if skill_frontmatter_status "$name" "$target/SKILL.md"; then
+          :
+        else
+          frontmatter_status=$?
+          if ((frontmatter_status == 2)); then
+            verify_error "Skill frontmatter name does not match its directory: $name."
+          else
+            verify_error "Skill frontmatter is invalid: $name."
+          fi
+          repair 'back up changes, delete the checkout, and rerun the installer.'
+        fi
+      fi
+    done
+    if ((active_count == 0)); then
+      verify_error 'Checkout contains no skill directories.'
+      repair "back up changes, delete $checkout, and rerun the installer."
+    fi
+  fi
+
+  if [[ ! -f $manifest || -L $manifest || ! -r $manifest ]]; then
+    verify_error "Managed-skills manifest is missing or unreadable: $manifest."
+    repair "rerun the installer${current:+ for $current}."
+  else
+    marker_count=0
+    while IFS= read -r line || [[ -n $line ]]; do
+      case "$line" in
+        version=*)
+          ((marker_count+=1))
+          manifest_version=${line#version=}
+          [[ $manifest_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || marker_count=99
+          ;;
+        skill=*)
+          name=${line#skill=}
+          if ! valid_skill_name "$name" || list_contains "$name" "${managed_skills[@]}"; then
+            marker_count=99
+          else
+            managed_skills+=("$name")
+            ((manifest_count+=1))
+          fi
+          ;;
+        *) marker_count=99 ;;
+      esac
+    done < "$manifest"
+    if ((marker_count != 1)); then
+      verify_error "Managed-skills manifest is malformed: $manifest."
+      repair "rerun the installer${current:+ for $current}."
+    elif [[ -n $current && $manifest_version != "$current" ]]; then
+      verify_error "Manifest version $manifest_version does not match installed version $current."
+      repair "rerun the installer for $current."
+    fi
+  fi
+
+  if [[ -d $checkout/.git ]]; then
+    for name in "${active_skills[@]}"; do
+      if ! list_contains "$name" "${managed_skills[@]}"; then
+        verify_error "Manifest is missing active skill: $name."
+        repair "rerun the installer${current:+ for $current}."
+      fi
+      target=$skills_dir/$name
+      if [[ ! -L $target ]]; then
+        if [[ -e $target ]]; then
+          verify_error "Managed skill path is not a symbolic link: $name."
+        else
+          verify_error "Managed skill link is missing: $name."
+        fi
+        repair "rerun the installer${current:+ for $current}."
+      else
+        value=$(readlink "$target")
+        if [[ $value != "../repos/superpowers/skills/$name" && $value != "$checkout/skills/$name" ]]; then
+          verify_error "Managed skill link has the wrong target: $name."
+          repair "rerun the installer${current:+ for $current}."
+        elif [[ ! -d $target || ! -f $target/SKILL.md ]]; then
+          verify_error "Managed skill link is broken or its target is incomplete: $name."
+          repair "rerun the installer${current:+ for $current}."
+        elif skill_frontmatter_status "$name" "$target/SKILL.md"; then
+          verify_ok "Skill $name is healthy."
+        else
+          verify_error "Managed skill has invalid frontmatter: $name."
+          repair "rerun the installer${current:+ for $current}."
+        fi
+      fi
+    done
+    for name in "${managed_skills[@]}"; do
+      if ! list_contains "$name" "${active_skills[@]}"; then
+        verify_error "Manifest contains obsolete skill: $name."
+        repair "rerun the installer${current:+ for $current}."
+        target=$skills_dir/$name
+        if [[ ! -L $target ]]; then
+          if [[ -e $target ]]; then
+            verify_error "Obsolete managed skill path is not a symbolic link: $name."
+          else
+            verify_error "Obsolete managed skill link is missing: $name."
+          fi
+          repair "rerun the installer${current:+ for $current}."
+        else
+          value=$(readlink "$target")
+          if [[ $value != "../repos/superpowers/skills/$name" && $value != "$checkout/skills/$name" ]]; then
+            verify_error "Obsolete managed skill link has the wrong target: $name."
+            repair "rerun the installer${current:+ for $current}."
+          elif [[ ! -d $target || ! -f $target/SKILL.md ]]; then
+            verify_error "Obsolete managed skill link is broken: $name."
+            repair "rerun the installer${current:+ for $current}."
+          fi
+        fi
+      fi
+    done
+    shopt -s nullglob
+    for target in "$skills_dir"/*; do
+      [[ -L $target ]] || continue
+      name=${target##*/}
+      value=$(readlink "$target")
+      case "$value" in
+        ../repos/superpowers/skills/*|"$checkout"/skills/*)
+          if ! list_contains "$name" "${managed_skills[@]}"; then
+            verify_error "Unexpected managed-looking skill link: $name."
+            repair 'remove the obsolete link or rerun the installer.'
+          fi
+          ;;
+      esac
+    done
+    if ((errors == 0 && manifest_count == active_count)); then
+      verify_ok "Manifest matches active checkout ($active_count skills)."
+    fi
+  fi
+
+  agents=$repo/AGENTS.md
+  if ((!configure_repo)); then
+    verify_warning 'Repository policy verification was skipped by --no-agents-policy.'
+  elif [[ ! -f $agents || -L $agents || ! -r $agents ]]; then
+    verify_error "Repository policy is missing or is not a readable regular file: $agents."
+    repair 'rerun the installer to create the repository policy.'
+  elif awk -v s="$start" -v e="$end" '
+    { line=$0; sub(/\r$/, "", line) }
+    line == s { a++; if (a != 1 || b) exit 1 }
+    line == e { b++; if (b != 1 || a != 1) exit 1 }
+    END { if (a != 1 || b != 1) exit 1 }
+  ' "$agents"; then
+    verify_ok "Repository policy markers are valid: $agents"
+  else
+    verify_error "Repository policy markers are incomplete, repeated, or out of order: $agents."
+    repair 'resolve the CCBR marker section manually, then rerun the installer.'
+  fi
+
+  printf 'Verification summary: %d healthy, %d warnings, %d errors.\n' "$healthy" "$warnings" "$errors"
+  ((errors == 0))
+}
+
+if ((show_verify)); then
+  verify_installation
+  exit $?
+fi
+
 preflight_repository() {
   local probe
   agents=$repo/AGENTS.md
@@ -254,13 +489,7 @@ for dir in "$stage/skills"/*; do
   [[ -d $dir && ! -L $dir ]] || continue
   name=${dir##*/}
   file=$dir/SKILL.md
-  if [[ -f $file && -r $file ]] && awk -v name="$name" '
-    NR == 1 { if ($0 != "---") exit 1; next }
-    $0 == "---" { closed=1; exit !(found_name && found_description) }
-    /^name: / { found_name = (substr($0, 7) == name) }
-    /^description: / { found_description = (length($0) > 13) }
-    END { if (!closed || !found_name || !found_description) exit 1 }
-  ' "$file"; then
+  if [[ -f $file && -r $file ]] && skill_frontmatter_status "$name" "$file"; then
     valid_skills+=("$name")
   else
     warn "Skipping invalid skill in $version: $name"

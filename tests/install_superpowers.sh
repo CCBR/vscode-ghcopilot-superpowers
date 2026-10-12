@@ -9,7 +9,7 @@ home=$tmp/home
 install_root=$home/.claude
 
 assert_contains() {
-  grep -Fq "$2" "$1" || { printf 'Expected %s to contain: %s\n' "$1" "$2" >&2; cat "$1" >&2; exit 1; }
+  grep -Fq -- "$2" "$1" || { printf 'Expected %s to contain: %s\n' "$1" "$2" >&2; cat "$1" >&2; exit 1; }
 }
 reject() {
   if "$@" >"$tmp/out" 2>&1; then
@@ -150,6 +150,15 @@ assert_contains "$tmp/out" 'Run this installer inside a Git working tree.'
 
 run() { run_in "$tmp/project/nested/directory" "$@"; }
 
+reject run --verify --status
+assert_contains "$tmp/out" '--verify cannot be combined with'
+reject run --verify --list-versions
+assert_contains "$tmp/out" '--verify cannot be combined with'
+reject run --verify --version v6.4.2
+assert_contains "$tmp/out" '--verify cannot be combined with'
+reject run --verify --replace-conflicts
+assert_contains "$tmp/out" '--verify cannot be combined with'
+
 run >"$tmp/out"
 assert_contains "$tmp/out" "Using personal Superpowers directory: $install_root"
 assert_contains "$tmp/out" 'Superpowers v6.4.2: 2 created, 0 repaired, 0 already correct, 0 obsolete removed.'
@@ -164,6 +173,122 @@ assert_contains "$tmp/project/AGENTS.md" 'https://raw.githubusercontent.com/CCBR
 assert_contains "$tmp/project/AGENTS.md" 'Do not install Superpowers automatically.'
 assert_contains "$tmp/project/AGENTS.md" 'Do not create or use repository-local links'
 [[ ! -e $tmp/project/nested/directory/AGENTS.md ]]
+
+find "$install_root" "$tmp/project" -printf '%p|%y|%m|%s|%T@|%l\n' | sort >"$tmp/verify-state-before"
+run --verify >"$tmp/out"
+assert_contains "$tmp/out" 'OK: Installed version: v6.4.2'
+assert_contains "$tmp/out" "OK: Checkout commit: $(git -C "$install_root/repos/superpowers" rev-parse HEAD)"
+assert_contains "$tmp/out" 'OK: Manifest matches active checkout (2 skills).'
+assert_contains "$tmp/out" 'OK: Skill brainstorming is healthy.'
+assert_contains "$tmp/out" 'OK: Repository policy markers are valid:'
+assert_contains "$tmp/out" 'Verification summary:'
+assert_contains "$tmp/out" '8 healthy, 0 warnings, 0 errors.'
+find "$install_root" "$tmp/project" -printf '%p|%y|%m|%s|%T@|%l\n' | sort >"$tmp/verify-state-after"
+cmp -s "$tmp/verify-state-before" "$tmp/verify-state-after"
+
+rm "$install_root/skills/brainstorming"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Managed skill link is missing: brainstorming.'
+assert_contains "$tmp/out" 'Repair: rerun the installer for v6.4.2.'
+ln -s ../repos/superpowers/skills/brainstorming "$install_root/skills/brainstorming"
+
+ln -sfn ../repos/superpowers/skills/writing-plans "$install_root/skills/brainstorming"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Managed skill link has the wrong target: brainstorming.'
+assert_contains "$tmp/out" 'Repair: rerun the installer for v6.4.2.'
+ln -sfn ../repos/superpowers/skills/brainstorming "$install_root/skills/brainstorming"
+
+ln -sfn ../repos/superpowers/skills/missing "$install_root/skills/brainstorming"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Managed skill link has the wrong target: brainstorming.'
+assert_contains "$tmp/out" 'Repair: rerun the installer for v6.4.2.'
+ln -sfn ../repos/superpowers/skills/brainstorming "$install_root/skills/brainstorming"
+
+printf 'dirty\n' >"$install_root/repos/superpowers/dirty"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Checkout has local changes.'
+assert_contains "$tmp/out" "Repair: back up changes, delete $install_root/repos/superpowers, and rerun the installer."
+rm "$install_root/repos/superpowers/dirty"
+
+git -C "$install_root/repos/superpowers" remote set-url origin "$tmp/wrong-origin"
+reject run --verify
+assert_contains "$tmp/out" "ERROR: Checkout origin is unexpected: $tmp/wrong-origin."
+assert_contains "$tmp/out" "Repair: back up changes, delete $install_root/repos/superpowers, and rerun the installer."
+git -C "$install_root/repos/superpowers" remote set-url origin "$upstream"
+
+cp "$install_root/.ccbr-superpowers-managed" "$tmp/manifest-good"
+printf '%s\n' 'version=v6.4.2' 'skill=brainstorming' 'invalid manifest line' >"$install_root/.ccbr-superpowers-managed"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Managed-skills manifest is malformed:'
+assert_contains "$tmp/out" 'Repair: rerun the installer for v6.4.2.'
+cp "$tmp/manifest-good" "$install_root/.ccbr-superpowers-managed"
+
+cp "$tmp/project/AGENTS.md" "$tmp/agents-good"
+printf '%s\n' '<!-- CCBR-SUPERPOWERS-START -->' 'incomplete policy' >"$tmp/project/AGENTS.md"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Repository policy markers are incomplete, repeated, or out of order:'
+assert_contains "$tmp/out" 'Repair: resolve the CCBR marker section manually, then rerun the installer.'
+run --verify --no-agents-policy >"$tmp/out"
+assert_contains "$tmp/out" 'WARNING: Repository policy verification was skipped by --no-agents-policy.'
+assert_contains "$tmp/out" '7 healthy, 1 warnings, 0 errors.'
+cp "$tmp/agents-good" "$tmp/project/AGENTS.md"
+
+printf '%s\n' 'version=v6.4.2' 'skill=brainstorming' >"$install_root/.ccbr-superpowers-managed"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Manifest is missing active skill: writing-plans.'
+cp "$tmp/manifest-good" "$install_root/.ccbr-superpowers-managed"
+
+mv "$install_root/repos/superpowers/skills/brainstorming" "$tmp/brainstorming-missing"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Manifest contains obsolete skill: brainstorming.'
+assert_contains "$tmp/out" 'ERROR: Obsolete managed skill link is broken: brainstorming.'
+assert_contains "$tmp/out" 'Repair: rerun the installer for v6.4.2.'
+mv "$tmp/brainstorming-missing" "$install_root/repos/superpowers/skills/brainstorming"
+
+printf '%s\n' 'version=v6.4.2' 'skill=brainstorming' 'skill=writing-plans' 'skill=obsolete' >"$install_root/.ccbr-superpowers-managed"
+ln -s ../repos/superpowers/skills/obsolete "$install_root/skills/obsolete"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Manifest contains obsolete skill: obsolete.'
+assert_contains "$tmp/out" 'Repair: rerun the installer for v6.4.2.'
+rm "$install_root/skills/obsolete"
+cp "$tmp/manifest-good" "$install_root/.ccbr-superpowers-managed"
+
+mkdir -p "$install_root/repos/superpowers/skills/obsolete"
+printf '%s\n' '---' 'name: obsolete' 'description: Obsolete test skill' '---' >"$install_root/repos/superpowers/skills/obsolete/SKILL.md"
+ln -s ../repos/superpowers/skills/obsolete "$install_root/skills/obsolete"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Unexpected managed-looking skill link: obsolete.'
+assert_contains "$tmp/out" 'Repair: remove the obsolete link or rerun the installer.'
+rm "$install_root/skills/obsolete"
+rm -rf "$install_root/repos/superpowers/skills/obsolete"
+
+cp "$install_root/repos/superpowers/skills/brainstorming/SKILL.md" "$tmp/skill-good"
+sed -i 's/name: brainstorming/name: wrong-name/' "$install_root/repos/superpowers/skills/brainstorming/SKILL.md"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Skill frontmatter name does not match its directory: brainstorming.'
+assert_contains "$tmp/out" 'Repair: back up changes, delete the checkout, and rerun the installer.'
+cp "$tmp/skill-good" "$install_root/repos/superpowers/skills/brainstorming/SKILL.md"
+
+sed -i '/^description: /d' "$install_root/repos/superpowers/skills/brainstorming/SKILL.md"
+reject run --verify
+assert_contains "$tmp/out" 'ERROR: Skill frontmatter is invalid: brainstorming.'
+assert_contains "$tmp/out" 'Repair: back up changes, delete the checkout, and rerun the installer.'
+cp "$tmp/skill-good" "$install_root/repos/superpowers/skills/brainstorming/SKILL.md"
+
+verify_fake_bin=$tmp/verify-fake-bin
+mkdir -p "$verify_fake_bin"
+cat >"$verify_fake_bin/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *' fetch '*|*' ls-remote '*) printf 'verify attempted network access\n' >&2; exit 99 ;;
+esac
+exec $(command -v git) "\$@"
+EOF
+chmod +x "$verify_fake_bin/git"
+(cd "$tmp/project/nested/directory" &&
+  PATH="$verify_fake_bin:$PATH" HOME=$home CCBR_SUPERPOWERS_REPO_URL=$upstream \
+    bash "$installer" --verify) >"$tmp/out"
+  assert_contains "$tmp/out" '8 healthy, 0 warnings, 0 errors.'
 
 run >"$tmp/out"
 assert_contains "$tmp/out" '0 created, 0 repaired, 2 already correct, 0 obsolete removed.'

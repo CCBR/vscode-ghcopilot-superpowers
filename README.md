@@ -81,6 +81,18 @@ curl -fsSL \
   | bash -s -- --status
 ```
 
+Run a detailed, read-only health check of the personal installation and the current repository policy with:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s -- --verify
+```
+
+Verification reports the installed tag and full commit ID; checks the checkout origin and local state; validates the manifest, skill links, target directories, `SKILL.md` files, and frontmatter names; and checks the current repository's managed `AGENTS.md` markers. It does not modify files, fetch tags, or otherwise access the network after the script is downloaded. Each failed check includes a repair recommendation, and the command exits nonzero when repair is needed.
+
+To check only the personal installation and explicitly skip the current repository's `AGENTS.md`, combine `--verify` with `--no-agents-policy`.
+
 List the available upstream releases, newest first, before choosing a version:
 
 ```bash
@@ -153,6 +165,7 @@ All repository-owned content outside the markers is preserved. The installed Sup
 -v, --version TAG       Install or switch to an exact upstream tag
     --status            Report the installed version and managed links
     --list-versions     List available upstream versions without making changes
+    --verify            Verify installation and policy health without making changes
     --replace-conflicts Back up conflicting files/directories without prompting
     --no-agents-policy  Do not update AGENTS.md with the CCBR policy
 -h, --help              Show help
