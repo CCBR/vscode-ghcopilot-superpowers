@@ -39,9 +39,35 @@ git init -q "$upstream"
 add_skill brainstorming
 add_skill writing-plans
 commit_tag initial v6.4.2
+git -C "$upstream" -c user.name=Test -c user.email=test@example.com commit --allow-empty -qm v6.9.0
+git -C "$upstream" tag v6.9.0
+git -C "$upstream" -c user.name=Test -c user.email=test@example.com commit --allow-empty -qm v6.10.0
+git -C "$upstream" tag v6.10.0
+git -C "$upstream" tag unrelated-tag
+git -C "$upstream" reset --hard -q v6.4.2
 git -C "$tmp" init -q project
 mkdir -p "$tmp/project/nested/directory"
 printf 'Project instructions\n' >"$tmp/project/AGENTS.md"
+
+list_home=$tmp/list-home
+(cd "$tmp/project" &&
+  HOME=$list_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
+    bash "$installer" --list-versions) >"$tmp/out"
+assert_contains "$tmp/out" 'Available Superpowers versions:'
+listed_versions=$(sed -n 's/^  \(v[0-9].*\)$/\1/p' "$tmp/out" | paste -sd ' ' -)
+[[ $listed_versions == 'v6.10.0 v6.9.0 v6.4.2' ]]
+! grep -Fq 'unrelated-tag' "$tmp/out"
+[[ ! -e $list_home/.claude ]]
+[[ $(cat "$tmp/project/AGENTS.md") == 'Project instructions' ]]
+
+if (cd "$tmp/project" &&
+  HOME=$list_home CCBR_SUPERPOWERS_REPO_URL=$tmp/missing-upstream \
+    bash "$installer" --list-versions) >"$tmp/out" 2>&1; then
+  printf 'Expected version-list failure\n' >&2
+  exit 1
+fi
+assert_contains "$tmp/out" 'Could not list Superpowers versions from'
+[[ ! -e $list_home/.claude ]]
 
 truncated_home=$tmp/truncated-home
 sed '$d' "$installer" | (
@@ -144,6 +170,17 @@ assert_contains "$tmp/out" '0 created, 0 repaired, 2 already correct, 0 obsolete
 run --status >"$tmp/out"
 assert_contains "$tmp/out" 'Superpowers v6.4.2 is installed'
 assert_contains "$tmp/out" '2 managed skills available'
+checkout_before=$(git -C "$install_root/repos/superpowers" rev-parse HEAD)
+cp "$install_root/.ccbr-superpowers-managed" "$tmp/manifest-before"
+find "$install_root/skills" -maxdepth 1 -type l -printf '%f=%l\n' | sort >"$tmp/links-before"
+cp "$tmp/project/AGENTS.md" "$tmp/agents-before-list"
+run --list-versions >"$tmp/out"
+assert_contains "$tmp/out" '  v6.4.2 (installed)'
+[[ $(git -C "$install_root/repos/superpowers" rev-parse HEAD) == "$checkout_before" ]]
+cmp -s "$install_root/.ccbr-superpowers-managed" "$tmp/manifest-before"
+find "$install_root/skills" -maxdepth 1 -type l -printf '%f=%l\n' | sort >"$tmp/links-after"
+cmp -s "$tmp/links-before" "$tmp/links-after"
+cmp -s "$tmp/project/AGENTS.md" "$tmp/agents-before-list"
 
 git -C "$install_root/repos/superpowers" remote set-url origin "$tmp/wrong-origin"
 reject run

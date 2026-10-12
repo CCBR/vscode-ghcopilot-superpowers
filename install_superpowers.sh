@@ -12,6 +12,7 @@ skills_dir=$install_root/skills
 manifest=$install_root/.ccbr-superpowers-managed
 replace_conflicts=0
 show_status=0
+list_versions=0
 configure_repo=1
 start='<!-- CCBR-SUPERPOWERS-START -->'
 end='<!-- CCBR-SUPERPOWERS-END -->'
@@ -39,8 +40,9 @@ Install, update, or repair personal Superpowers skills.
 Options:
   -v, --version TAG       Install an exact upstream tag (default: v6.4.2)
       --status            Report the installed version and managed skills
+      --list-versions     List available upstream versions without making changes
       --replace-conflicts Back up conflicting files/directories without prompting
-      --no-agents-policy Do not update AGENTS.md with the CCBR policy
+      --no-agents-policy  Do not update AGENTS.md with the CCBR policy
   -h, --help              Show this help
 
 Environment variables intended for testing or mirrors:
@@ -58,6 +60,10 @@ while (($#)); do
       ;;
     --status)
       show_status=1
+      shift
+      ;;
+    --list-versions)
+      list_versions=1
       shift
       ;;
     --replace-conflicts)
@@ -80,6 +86,7 @@ while (($#)); do
   esac
 done
 (($# == 0)) || fail "Unexpected argument: $1"
+((!show_status || !list_versions)) || fail '--status and --list-versions cannot be used together.'
 
 command -v git >/dev/null 2>&1 || fail 'Git is required.'
 repo=$(git rev-parse --show-toplevel 2>/dev/null) || fail 'Run this installer inside a Git working tree.'
@@ -121,9 +128,45 @@ status() {
   printf 'Superpowers %s is installed at %s (%d managed skills available).\n' "$current" "$checkout" "$count"
 }
 
+list_available_versions() {
+  local current refs versions listed=0 item
+  if ! refs=$(git ls-remote --tags "$repo_url" 'refs/tags/v*' 2>/dev/null); then
+    fail "Could not list Superpowers versions from $repo_url. Check network access and the repository URL."
+  fi
+  versions=$(printf '%s\n' "$refs" | awk '
+    $2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+(\^\{\})?$/ {
+      ref=$2
+      sub(/^refs\/tags\/v/, "", ref)
+      sub(/\^\{\}$/, "", ref)
+      if (!seen[ref]++) {
+        split(ref, part, ".")
+        printf "%s\t%s\t%s\tv%s\n", part[1], part[2], part[3], ref
+      }
+    }
+  ' | sort -t "$(printf '\t')" -k1,1nr -k2,2nr -k3,3nr | awk -F '\t' '{ print $4 }')
+  [[ -n $versions ]] || fail "No semantic Superpowers version tags were found in $repo_url."
+  current=$(installed_version || true)
+  printf 'Available Superpowers versions:\n'
+  while IFS= read -r item; do
+    [[ -n $item ]] || continue
+    if [[ $item == "$current" ]]; then
+      printf '  %s (installed)\n' "$item"
+    else
+      printf '  %s\n' "$item"
+    fi
+    ((listed+=1))
+  done <<< "$versions"
+  printf '%d version(s) available. Install one with --version TAG.\n' "$listed"
+}
+
 if ((show_status)); then
   status
   exit $?
+fi
+
+if ((list_versions)); then
+  list_available_versions
+  exit 0
 fi
 
 command -v tar >/dev/null 2>&1 || fail 'tar is required.'

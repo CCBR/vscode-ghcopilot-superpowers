@@ -81,6 +81,16 @@ curl -fsSL \
   | bash -s -- --status
 ```
 
+List the available upstream releases, newest first, before choosing a version:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s -- --list-versions
+```
+
+This read-only command marks the installed version when one exists. It does not create or change the personal checkout, skill links, managed-skills manifest, or `AGENTS.md`; use `--version TAG` to install or switch versions.
+
 ## Existing skills and conflicts
 
 For every valid skill in the selected release, the installer:
@@ -142,8 +152,9 @@ All repository-owned content outside the markers is preserved. The installed Sup
 ```text
 -v, --version TAG       Install or switch to an exact upstream tag
     --status            Report the installed version and managed links
+    --list-versions     List available upstream versions without making changes
     --replace-conflicts Back up conflicting files/directories without prompting
-  --no-agents-policy Do not update AGENTS.md with the CCBR policy
+    --no-agents-policy  Do not update AGENTS.md with the CCBR policy
 -h, --help              Show help
 ```
 
