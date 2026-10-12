@@ -1,54 +1,164 @@
-# CCBR Superpowers for VS Code on BioWulf
+# CCBR Superpowers installer
 
-This repository is a small bootstrap utility for development on **NIH BioWulf through VS Code Remote SSH with GitHub Copilot**. It exposes skills from [upstream Superpowers](https://github.com/obra/superpowers) to a Git repository using VS Code's native Agent Skills location. It does not fork, install, download, update, or copy Superpowers.
+This repository provides a portable installer for [obra/superpowers](https://github.com/obra/superpowers). It installs personal Agent Skills for VS Code and other compatible agents on BioWulf, FRCE, and CCBR government-furnished equipment (GFE).
 
-CCBR maintains the shared upstream checkout at `/data/CCBR_Pipeliner/db/PipeDB/AI/superpowers` (currently **v6.4.2**) and separately deploys this installer at `/data/CCBR_Pipeliner/db/PipeDB/AI/vscode-ghcopilot-superpowers`. Administrators maintain both checkouts; normal users only need read/execute permission. Running the deployed installer needs neither internet access nor GitHub authentication.
+Each environment gets its own checkout under that environment's home directory:
 
-## Install in a repository
-
-Prerequisites: Bash, Git, access to both shared checkouts, write permission in the target Git working tree, and VS Code Remote SSH with GitHub Copilot and Agent Skills enabled (`chat.useAgentSkills`). Run from the repository root **or any subdirectory**:
-
-```bash
-cd /path/to/target/repository
-/data/CCBR_Pipeliner/db/PipeDB/AI/vscode-ghcopilot-superpowers/install_superpowers.sh
+```text
+~/.claude/
+├── repos/
+│   └── superpowers/                 # Upstream Git checkout at an exact tag
+└── skills/
+    ├── brainstorming -> ../repos/superpowers/skills/brainstorming
+    └── ...
 ```
 
-`bash /data/CCBR_Pipeliner/db/PipeDB/AI/vscode-ghcopilot-superpowers/install_superpowers.sh` also works. No personal checkout, home-directory changes, or copy of this script is needed.
+Because both directories are relative to `$HOME`, the same link layout works locally and through VS Code Remote SSH. BioWulf, FRCE, and the GFE do not share one checkout; run the installer once in each environment. The personal skills are then available to every repository opened in that environment.
 
-The installer finds the Git working-tree root and:
+The installer must be run from inside a Git working tree. It may be run from the repository root or any subdirectory. By default, it also adds or refreshes the CCBR Superpowers policy in the repository root's `AGENTS.md`.
 
-- Creates `.github/skills/` if necessary and adds **one directory symlink per valid shared skill**, for example `.github/skills/brainstorming -> /data/CCBR_Pipeliner/db/PipeDB/AI/superpowers/skills/brainstorming`. A skill needs readable `SKILL.md` with `name` matching its directory and a `description` in YAML frontmatter. Skills lacking these are skipped and reported. The shared files remain authoritative; no skill contents are copied.
-- Creates `AGENTS.md`, or inserts/refreshes **only** the section between `<!-- CCBR-SUPERPOWERS-START -->` and `<!-- CCBR-SUPERPOWERS-END -->`. All other project instructions remain in place. Existing malformed or duplicate markers cause a safe failure requiring manual resolution.
-- Leaves existing unrelated `.github/skills` entries alone. A name already occupied by anything other than the expected working symlink is a conflict; it is reported without modifying the repository. This includes broken or redirected symlinks.
+## Install
 
-It does **not** touch `.github/copilot-instructions.md`, create `.github/prompts/`, or modify either shared checkout. Repository owners may separately configure Copilot instructions to refer to `AGENTS.md` if their environment does not load it automatically. Rerun the installer after CCBR adds skills; repeated runs leave correct links and policy unchanged.
+Prerequisites are Bash, Git, `tar`, HTTPS access to GitHub, write access to `$HOME/.claude`, and a target Git working tree. The default Superpowers version is `v6.4.2`.
 
-## Usage policy
+From anywhere inside the target repository, run the installer directly from GitHub:
 
-The managed `AGENTS.md` section contains the full CCBR policy: **Superpowers is optional, not the default**. For small or routine work (docs, configuration, obvious fixes, mechanical refactors, simple tests), work directly with targeted validation. Consider only the smallest appropriate subset of Superpowers for large, ambiguous, non-routine, or risky changes where structured workflow materially reduces risk. **Do not invoke TDD by default**: reserve it for substantial behavior, critical shared code, significant regression risk, or an explicit user request. The repository policy determines *whether* to use a skill; only after a skill is deliberately selected do its instructions govern the workflow. Merely discovering a skill is not a command to use it.
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s --
+```
 
-## Verify discovery on BioWulf
+### Alternative installation methods
 
-[VS Code's Agent Skills documentation](https://code.visualstudio.com/docs/copilot/customization/agent-skills) documents `.github/skills/` as a workspace skill location, `SKILL.md` frontmatter, and the Configure Skills menu. [Upstream v6.4.2](https://github.com/obra/superpowers/tree/v6.4.2/skills) contains skill directories with `SKILL.md` files. **It does not conclusively document that VS Code Remote SSH follows directory symlinks while discovering skills.** The installer uses symlinks as proposed; discovery on your BioWulf VS Code installation must be confirmed rather than assumed:
+To inspect the script before running it, download it first:
 
-1. Run the installer in a disposable test Git repository on BioWulf. Confirm `ls -l .github/skills/brainstorming` shows a link to the shared skill and `cat .github/skills/brainstorming/SKILL.md` shows its upstream frontmatter.
-2. Open the **repository folder** via VS Code Remote SSH, then run **Developer: Reload Window** (or reopen the folder) after installation. Ensure GitHub Copilot is enabled and `chat.useAgentSkills` is on.
-3. In Copilot Chat, choose **Configure Chat → Skills** or type `/skills` to open Configure Skills. Check whether `brainstorming` (and other shared skill names) appears. In a disposable chat, explicitly ask Copilot to use the `brainstorming` skill and verify that it references the upstream skill's contents, rather than merely claiming it can see the link. This is a discovery test, not a recommendation to use brainstorming for routine tasks.
-4. If absent, compare with a disposable ordinary directory skill under `.github/skills/` in the same test repository (with matching frontmatter). If that appears but the symlink does not, report the VS Code/Copilot version and Remote SSH setup to CCBR. Do not silently replace shared symlinks with copied skill files.
+```bash
+curl -fsSLo /tmp/install-superpowers.sh \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh
+bash /tmp/install-superpowers.sh
+```
 
-VS Code may need a window reload to refresh skills after installation. Skill availability does not guarantee automatic selection for every prompt.
+From a checkout of this repository:
 
-## Troubleshooting and removal
+```bash
+bash install_superpowers.sh
+```
 
-- **Missing shared path / permission denied:** ask CCBR administrators to verify read and traversal permissions on the shared Superpowers checkout, its `skills` directory, and this installer. The installer does not fix shared deployments.
-- **Broken or unexpected link / name conflict:** inspect `ls -l .github/skills/<name>`; decide who owns the entry before manually changing it. The installer never deletes or replaces existing skills.
-- **Skill not listed in VS Code:** check `SKILL.md` frontmatter and name, `chat.useAgentSkills`, the opened workspace root, Remote SSH permissions, reload, and the validation procedure above. Directory-symlink discovery is an open compatibility question until verified on BioWulf.
-- **Invalid AGENTS.md markers:** resolve unmatched, reversed, or repeated CCBR marker lines by hand while retaining other instructions, then rerun.
+Arguments for direct GitHub execution go after `bash -s --`, as shown in the examples below.
 
-To remove the integration, inspect `.github/skills/` and remove **only** symlinks that point to `/data/CCBR_Pipeliner/db/PipeDB/AI/superpowers/skills/<same-name>`; leave project-owned skills and directories alone. Remove only the CCBR-marked section from `AGENTS.md`, preserving everything else. Delete `AGENTS.md` or `.github/skills/` only if you have confirmed they contain no other project content. Neither shared checkout needs changing.
+The installer recognizes these hostname patterns for reporting:
+
+- `biowulf.nih.gov` and `cnNNNN`: BioWulf
+- `*.ncifcrf.gov`: FRCE
+- `NCI-*`: GFE
+
+An unrecognized hostname is not fatal. Installation still uses the current `$HOME`, which is the source of truth for the environment-specific location.
+
+## Update or roll back
+
+Use the same command with an exact upstream tag:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s -- --version v6.4.3
+```
+
+This fetches upstream tags, validates the requested release, switches the personal checkout to that tag, and reconciles the personal skill links. It dynamically adds skills introduced by the release and removes obsolete links only when they were previously managed by this installer. Existing valid links continue to point through the stable checkout path.
+
+The operation also supports intentional rollback:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s -- --version v6.4.2
+```
+
+If the requested tag does not exist, the active checkout remains unchanged. The installer refuses to switch versions when the checkout has local changes or its `origin` is not the official `obra/superpowers` repository.
+
+Check the installed version and managed links with:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s -- --status
+```
+
+## Existing skills and conflicts
+
+For every valid skill in the selected release, the installer:
+
+- Leaves a correct managed link unchanged.
+- Replaces a wrong or broken symlink.
+- Creates a missing link.
+- Leaves unrelated personal skills alone.
+- Asks before replacing an ordinary file or directory with the same skill name.
+
+Accepted conflicting files and directories are moved into a timestamped backup under `~/.claude/skills/`; they are not deleted. For noninteractive use, approve that behavior explicitly:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s -- --replace-conflicts
+```
+
+The installer does not modify `~/.claude/skills/synced/`.
+
+## Repository policy
+
+The default installation adds or refreshes the CCBR usage policy in the current Git repository's root-level `AGENTS.md`. Running the command from a subdirectory still updates the repository root:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s --
+```
+
+Personal skill discovery does not itself require `AGENTS.md`. To install or update the personal skills without changing the current repository's policy, use the explicit opt-out:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s -- --no-agents-policy
+```
+
+The managed section says that personal Superpowers skills may be available under `~/.claude/skills/`, but their presence does not require their use. Agents should use the smallest appropriate workflow only for sufficiently large, ambiguous, non-routine, or risky tasks. The Superpowers test-driven-development workflow is not the default for small or routine work.
+
+The installer creates or refreshes only the content between these markers:
+
+```markdown
+<!-- CCBR-SUPERPOWERS-START -->
+...
+<!-- CCBR-SUPERPOWERS-END -->
+```
+
+All repository-owned content outside the markers is preserved. The installed Superpowers version is intentionally absent from `AGENTS.md`, so a personal version update does not require changes across repositories.
+
+## Options
+
+```text
+-v, --version TAG       Install or switch to an exact upstream tag
+    --status            Report the installed version and managed links
+    --replace-conflicts Back up conflicting files/directories without prompting
+  --no-agents-policy Do not update AGENTS.md with the CCBR policy
+-h, --help              Show help
+```
+
+Environment variables intended for tests or approved mirrors:
+
+- `CCBR_SUPERPOWERS_REPO_URL`: override the upstream repository URL.
+- `CCBR_SUPERPOWERS_INSTALL_ROOT`: override `~/.claude`.
+- `CCBR_SUPERPOWERS_HOSTNAME`: override hostname detection.
 
 ## Development
 
-Run the isolated test suite with `bash tests/install_superpowers.sh`. It uses temporary Git repositories and fixture skills, not the BioWulf paths. For tests/development only, `CCBR_SUPERPOWERS_ROOT` overrides the production source; normal users need no configuration.
+Run the isolated test suite with:
 
-Credit for the skill definitions and workflows belongs to [obra/superpowers](https://github.com/obra/superpowers). This repository only integrates CCBR's centrally managed deployment with VS Code/GitHub Copilot.
+```bash
+bash tests/install_superpowers.sh
+```
+
+The tests create temporary homes and local tagged Git repositories. They do not modify the user's personal installation or require network access.
+
+Credit for the skills and workflows belongs to [obra/superpowers](https://github.com/obra/superpowers). This repository provides installation and CCBR usage-policy management only.

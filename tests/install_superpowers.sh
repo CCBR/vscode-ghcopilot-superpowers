@@ -3,130 +3,125 @@ set -euo pipefail
 
 installer=$(cd "$(dirname "$0")/.." && pwd)/install_superpowers.sh
 tmp=$(mktemp -d)
-trap 'rm -rf -- "$tmp"' EXIT
-export CCBR_SUPERPOWERS_ROOT=$tmp/shared
-mkdir -p "$CCBR_SUPERPOWERS_ROOT/skills"
-git -C "$tmp" init -q repo
-repo=$tmp/repo
+trap 'rm -rf "$tmp"' EXIT
+upstream=$tmp/upstream
+home=$tmp/home
+install_root=$home/.claude
 
-skill() {
-  mkdir -p "$CCBR_SUPERPOWERS_ROOT/skills/$1"
-  printf '%s\n' '---' "name: $1" 'description: A test skill' '---' > "$CCBR_SUPERPOWERS_ROOT/skills/$1/SKILL.md"
+assert_contains() {
+  grep -Fq "$2" "$1" || { printf 'Expected %s to contain: %s\n' "$1" "$2" >&2; cat "$1" >&2; exit 1; }
 }
-run() { (cd "$1" && bash "$installer"); }
 reject() {
-  if run "$1" > "$tmp/out" 2>&1; then
-    printf 'Expected failure: %s\n' "$1" >&2
+  if "$@" >"$tmp/out" 2>&1; then
+    printf 'Expected failure: %s\n' "$*" >&2
     exit 1
   fi
-  grep -Fq "$2" "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 }
-assert_same() { cmp -s "$1" "$2" || { printf 'Unexpected content: %s\n' "$1" >&2; exit 1; }; }
+run_in() {
+  local directory=$1
+  shift
+  (cd "$directory" &&
+    HOME=$home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=${CCBR_SUPERPOWERS_HOSTNAME:-NCI-TEST} \
+      bash "$installer" "$@")
+}
+add_skill() {
+  local name=$1
+  mkdir -p "$upstream/skills/$name"
+  printf '%s\n' '---' "name: $name" 'description: A test skill' '---' >"$upstream/skills/$name/SKILL.md"
+}
+commit_tag() {
+  git -C "$upstream" add .
+  git -C "$upstream" -c user.name=Test -c user.email=test@example.com commit -qm "$1"
+  git -C "$upstream" tag "$2"
+}
 
-skill brainstorming
-reject "$tmp" 'inside a Git working tree'
-mv "$CCBR_SUPERPOWERS_ROOT" "$tmp/hidden"
-reject "$repo" 'Shared Superpowers installation'
-mv "$tmp/hidden" "$CCBR_SUPERPOWERS_ROOT"
-mv "$CCBR_SUPERPOWERS_ROOT/skills" "$tmp/hidden"
-reject "$repo" 'Shared skills directory'
-mv "$tmp/hidden" "$CCBR_SUPERPOWERS_ROOT/skills"
+git init -q "$upstream"
+add_skill brainstorming
+add_skill writing-plans
+commit_tag initial v6.4.2
+git -C "$tmp" init -q project
+mkdir -p "$tmp/project/nested/directory"
+printf 'Project instructions\n' >"$tmp/project/AGENTS.md"
 
-mkdir -p "$CCBR_SUPERPOWERS_ROOT/skills/invalid" "$CCBR_SUPERPOWERS_ROOT/skills/malformed"
-printf '%s\n' 'not YAML' > "$CCBR_SUPERPOWERS_ROOT/skills/malformed/SKILL.md"
-mkdir -p "$repo/.github/skills/project-release" "$repo/subdir"
-echo 'Project instructions' > "$repo/AGENTS.md"
-echo 'Project-owned skill' > "$repo/.github/skills/project-release/SKILL.md"
-echo 'Existing Copilot policy' > "$repo/.github/copilot-instructions.md"
-cp "$repo/.github/copilot-instructions.md" "$tmp/copilot-original"
-run "$repo/subdir" > "$tmp/out"
-grep -Fq '1 created' "$tmp/out"
-[[ $(readlink "$repo/.github/skills/brainstorming") == "$CCBR_SUPERPOWERS_ROOT/skills/brainstorming" ]]
-[[ ! -e $repo/.github/skills/invalid && ! -e $repo/.github/skills/malformed ]]
-grep -Fxq 'Project instructions' "$repo/AGENTS.md"
-grep -Fxq 'Project-owned skill' "$repo/.github/skills/project-release/SKILL.md"
-assert_same "$repo/.github/copilot-instructions.md" "$tmp/copilot-original"
-[[ ! -e $repo/.github/prompts ]]
-cp "$repo/AGENTS.md" "$tmp/agents-original"
-run "$repo" > "$tmp/out"
-grep -Fq '0 created, 1 already correct' "$tmp/out"
-assert_same "$repo/AGENTS.md" "$tmp/agents-original"
-[[ $(grep -Fc '<!-- CCBR-SUPERPOWERS-START -->' "$repo/AGENTS.md") -eq 1 ]]
-(cd "$repo" && CCBR_SUPERPOWERS_ROOT=../shared bash "$installer" > "$tmp/out")
-[[ $(readlink "$repo/.github/skills/brainstorming") == "$CCBR_SUPERPOWERS_ROOT/skills/brainstorming" ]]
-
-sed -i '/Superpowers is an optional workflow framework/c\OLD POLICY' "$repo/AGENTS.md"
-run "$repo" > "$tmp/out"
-grep -Fq 'AGENTS.md: updated' "$tmp/out"
-assert_same "$repo/AGENTS.md" "$tmp/agents-original"
-
-skill debugging
-mkdir "$repo/.github/skills/debugging"
-reject "$repo" 'Conflicts'
-[[ -d $repo/.github/skills/debugging && ! -L $repo/.github/skills/debugging ]]
-assert_same "$repo/AGENTS.md" "$tmp/agents-original"
-rmdir "$repo/.github/skills/debugging"
-ln -s "$tmp/missing" "$repo/.github/skills/debugging"
-reject "$repo" 'broken or unexpected symlink'
-[[ -L $repo/.github/skills/debugging ]]
-unlink "$repo/.github/skills/debugging"
-ln -s "$CCBR_SUPERPOWERS_ROOT/skills/brainstorming" "$repo/.github/skills/debugging"
-reject "$repo" 'broken or unexpected symlink'
-unlink "$repo/.github/skills/debugging"
-run "$repo" > "$tmp/out"
-[[ -L $repo/.github/skills/debugging ]]
-
-printf '%s\n' '<!-- CCBR-SUPERPOWERS-START -->' >> "$repo/AGENTS.md"
-reject "$repo" 'incomplete, repeated, or out-of-order'
-[[ $(grep -Fc '<!-- CCBR-SUPERPOWERS-START -->' "$repo/AGENTS.md") -eq 2 ]]
-cp "$tmp/agents-original" "$repo/AGENTS.md"
-
-git -C "$tmp" init -q clean
-(
-  cd "$tmp/clean"
-  "$installer" > "$tmp/out"
+truncated_home=$tmp/truncated-home
+sed '$d' "$installer" | (
+  cd "$tmp/project"
+  HOME=$truncated_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+    bash -s --
 )
-[[ -L $tmp/clean/.github/skills/brainstorming && -f $tmp/clean/AGENTS.md ]]
+[[ ! -e $truncated_home/.claude ]]
+[[ $(cat "$tmp/project/AGENTS.md") == 'Project instructions' ]]
 
-git -C "$tmp" init -q blocked
-mkdir -p "$tmp/blocked/.github"
-echo 'not a directory' > "$tmp/blocked/.github/skills"
-reject "$tmp/blocked" 'Expected an ordinary directory'
-[[ ! -e $tmp/blocked/AGENTS.md ]]
+reject run_in "$tmp"
+assert_contains "$tmp/out" 'Run this installer inside a Git working tree.'
+[[ ! -e $install_root ]]
 
-git -C "$tmp" init -q linked
-ln -s "$repo/AGENTS.md" "$tmp/linked/AGENTS.md"
-reject "$tmp/linked" 'not a symlink'
-[[ -L $tmp/linked/AGENTS.md ]]
+run() { run_in "$tmp/project/nested/directory" "$@"; }
 
-git -C "$tmp" init -q empty
-mkdir -p "$tmp/empty-shared/skills/bad"
-printf '%s\n' '---' 'name: other' 'description: wrong name' '---' > "$tmp/empty-shared/skills/bad/SKILL.md"
-if (cd "$tmp/empty" && CCBR_SUPERPOWERS_ROOT="$tmp/empty-shared" bash "$installer") > "$tmp/out" 2>&1; then
-  echo 'Expected failure with no valid skills' >&2
-  exit 1
-fi
-grep -Fq 'No valid skills' "$tmp/out"
-[[ ! -e $tmp/empty/AGENTS.md && ! -e $tmp/empty/.github ]]
+run >"$tmp/out"
+assert_contains "$tmp/out" 'Detected environment: GFE.'
+assert_contains "$tmp/out" 'Superpowers v6.4.2: 2 created, 0 repaired, 0 already correct, 0 obsolete removed.'
+[[ $(git -C "$install_root/repos/superpowers" describe --tags --exact-match) == v6.4.2 ]]
+[[ $(readlink "$install_root/skills/brainstorming") == ../repos/superpowers/skills/brainstorming ]]
+[[ -f $install_root/skills/brainstorming/SKILL.md ]]
+assert_contains "$tmp/project/AGENTS.md" 'Project instructions'
+assert_contains "$tmp/project/AGENTS.md" '<!-- CCBR-SUPERPOWERS-START -->'
+assert_contains "$tmp/project/AGENTS.md" '`~/.claude/skills/`'
+[[ ! -e $tmp/project/nested/directory/AGENTS.md ]]
 
-git -C "$tmp" init -q crlf
-printf 'before\r\n%s\r\nold policy\r\n%s\r\nafter\r\n' \
-  '<!-- CCBR-SUPERPOWERS-START -->' '<!-- CCBR-SUPERPOWERS-END -->' > "$tmp/crlf/AGENTS.md"
-run "$tmp/crlf" > "$tmp/out"
-[[ $(grep -Fc '<!-- CCBR-SUPERPOWERS-START -->' "$tmp/crlf/AGENTS.md") -eq 1 ]]
-grep -Fq 'Superpowers is an optional workflow framework' "$tmp/crlf/AGENTS.md"
-! grep -Fq 'old policy' "$tmp/crlf/AGENTS.md"
-grep -Fq $'before\r' "$tmp/crlf/AGENTS.md"
-grep -Fq $'after\r' "$tmp/crlf/AGENTS.md"
-cp "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
-run "$tmp/crlf" > "$tmp/out"
-assert_same "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
+run >"$tmp/out"
+assert_contains "$tmp/out" '0 created, 0 repaired, 2 already correct, 0 obsolete removed.'
+run --status >"$tmp/out"
+assert_contains "$tmp/out" 'Superpowers v6.4.2 is installed'
+assert_contains "$tmp/out" '2 managed skills available'
 
-printf 'before\n%s\nold policy\n%s\nafter without newline' \
-  '<!-- CCBR-SUPERPOWERS-START -->' '<!-- CCBR-SUPERPOWERS-END -->' > "$tmp/crlf/AGENTS.md"
-run "$tmp/crlf" > "$tmp/out"
-[[ $(tail -c 21 "$tmp/crlf/AGENTS.md") == 'after without newline' ]]
-cp "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
-run "$tmp/crlf" > "$tmp/out"
-assert_same "$tmp/crlf/AGENTS.md" "$tmp/crlf-original"
+ln -sfn "$tmp/missing" "$install_root/skills/brainstorming"
+run >"$tmp/out"
+assert_contains "$tmp/out" '0 created, 1 repaired, 1 already correct, 0 obsolete removed.'
+[[ $(readlink "$install_root/skills/brainstorming") == ../repos/superpowers/skills/brainstorming ]]
+
+rm "$install_root/skills/writing-plans"
+mkdir "$install_root/skills/writing-plans"
+printf 'personal content\n' >"$install_root/skills/writing-plans/notes.txt"
+run --replace-conflicts >"$tmp/out"
+assert_contains "$tmp/out" 'Backed up conflicting entries to'
+[[ -L $install_root/skills/writing-plans ]]
+backup=$(find "$install_root/skills" -maxdepth 1 -type d -name '.superpowers-backup-*' -print -quit)
+[[ -f $backup/writing-plans/notes.txt ]]
+
+rm -rf "$upstream/skills/writing-plans"
+add_skill systematic-debugging
+commit_tag update v6.4.3
+run --version v6.4.3 >"$tmp/out"
+assert_contains "$tmp/out" 'Superpowers v6.4.3: 1 created, 0 repaired, 1 already correct, 1 obsolete removed.'
+[[ $(git -C "$install_root/repos/superpowers" describe --tags --exact-match) == v6.4.3 ]]
+[[ ! -e $install_root/skills/writing-plans && ! -L $install_root/skills/writing-plans ]]
+[[ -L $install_root/skills/systematic-debugging ]]
+
+run --version v6.4.2 >"$tmp/out"
+assert_contains "$tmp/out" 'Superpowers v6.4.2: 1 created, 0 repaired, 1 already correct, 1 obsolete removed.'
+[[ -L $install_root/skills/writing-plans ]]
+[[ ! -e $install_root/skills/systematic-debugging && ! -L $install_root/skills/systematic-debugging ]]
+
+before=$(git -C "$install_root/repos/superpowers" rev-parse HEAD)
+reject run --version v9.9.9
+assert_contains "$tmp/out" 'tag v9.9.9 was not found'
+[[ $(git -C "$install_root/repos/superpowers" rev-parse HEAD) == "$before" ]]
+
+[[ $(grep -Fc '<!-- CCBR-SUPERPOWERS-START -->' "$tmp/project/AGENTS.md") -eq 1 ]]
+cp "$tmp/project/AGENTS.md" "$tmp/agents-original"
+run >"$tmp/out"
+cmp -s "$tmp/project/AGENTS.md" "$tmp/agents-original"
+
+git -C "$tmp" init -q no-policy
+run_in "$tmp/no-policy" --no-agents-policy >"$tmp/out"
+[[ ! -e $tmp/no-policy/AGENTS.md ]]
+
+unknown_home=$tmp/unknown-home
+(cd "$tmp/project" &&
+  HOME=$unknown_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=elsewhere \
+    bash "$installer" --no-agents-policy) >"$tmp/out" 2>&1
+assert_contains "$tmp/out" 'Unrecognized host; installing safely under HOME'
+[[ -L $unknown_home/.claude/skills/brainstorming ]]
+
 printf 'All installer tests passed.\n'
