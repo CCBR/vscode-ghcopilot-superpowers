@@ -69,6 +69,19 @@ assert_contains "$tmp/out" 'Already correct:'
 [[ $(cksum "$tmp/project/AGENTS.md") == "$agents_checksum_before" ]]
 [[ $(git -C "$tmp/project" status --porcelain=v1 --untracked-files=all) == "$project_status_before" ]]
 
+linked_dry_home=$tmp/linked-dry-home
+mkdir -p "$linked_dry_home/.claude/skills"
+ln -s ../repos/superpowers/skills/brainstorming "$linked_dry_home/.claude/skills/brainstorming"
+ln -s ../repos/superpowers/skills/missing "$linked_dry_home/.claude/skills/writing-plans"
+(cd "$tmp/project" &&
+  HOME=$linked_dry_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
+    bash "$installer" --dry-run --no-agents-policy) >"$tmp/out"
+assert_contains "$tmp/out" 'Managed skill link is already correct: brainstorming.'
+assert_contains "$tmp/out" 'Repair managed skill link: writing-plans.'
+! grep -Fq 'Repair managed skill link: brainstorming.' "$tmp/out"
+[[ $(readlink "$linked_dry_home/.claude/skills/brainstorming") == ../repos/superpowers/skills/brainstorming ]]
+[[ ! -e $linked_dry_home/.claude/repos ]]
+
 invalid_version_bin=$tmp/invalid-version-bin
 mkdir -p "$invalid_version_bin"
 cat >"$invalid_version_bin/git" <<EOF

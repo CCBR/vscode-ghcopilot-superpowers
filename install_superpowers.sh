@@ -338,8 +338,7 @@ preview_installation() {
     target=$skills_dir/$name
     if [[ -L $target ]]; then
       value=$(readlink "$target")
-      if [[ $value == "../repos/superpowers/skills/$name" || $value == "$checkout/skills/$name" ]] &&
-        [[ -f $target/SKILL.md ]]; then
+      if [[ $value == "../repos/superpowers/skills/$name" || $value == "$checkout/skills/$name" ]]; then
         correct_items+=("Managed skill link is already correct: $name.")
       else
         planned_actions+=("Repair managed skill link: $name.")
