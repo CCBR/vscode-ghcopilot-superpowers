@@ -170,6 +170,38 @@ fi
 [[ ! -e $failed_home/.claude/repos/superpowers ]]
 [[ -z $(find "$failed_home/.claude/repos" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]
 
+missing_tag_home=$tmp/missing-tag-home
+if (cd "$tmp/project" &&
+  HOME=$missing_tag_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
+    bash "$installer" --version v9.9.9 --no-agents-policy) >"$tmp/out" 2>&1; then
+  printf 'Expected unavailable fresh-install version failure\n' >&2
+  exit 1
+fi
+assert_contains "$tmp/out" 'Superpowers tag v9.9.9 was not found'
+[[ ! -e $missing_tag_home/.claude/repos/superpowers ]]
+[[ ! -e $missing_tag_home/.claude/.ccbr-superpowers-managed ]]
+[[ -z $(find "$missing_tag_home/.claude/skills" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]
+
+invalid_upstream=$tmp/invalid-upstream
+git clone -q "$upstream" "$invalid_upstream"
+rm -rf "$invalid_upstream/skills"
+mkdir -p "$invalid_upstream/skills/broken"
+printf 'invalid frontmatter\n' >"$invalid_upstream/skills/broken/SKILL.md"
+git -C "$invalid_upstream" add .
+git -C "$invalid_upstream" -c user.name=Test -c user.email=test@example.com commit -qm invalid
+git -C "$invalid_upstream" tag v6.4.3
+invalid_skills_home=$tmp/invalid-skills-home
+if (cd "$tmp/project" &&
+  HOME=$invalid_skills_home CCBR_SUPERPOWERS_REPO_URL=$invalid_upstream \
+    bash "$installer" --version v6.4.3 --no-agents-policy) >"$tmp/out" 2>&1; then
+  printf 'Expected invalid fresh-install skills failure\n' >&2
+  exit 1
+fi
+assert_contains "$tmp/out" 'No valid skills were found in Superpowers v6.4.3.'
+[[ ! -e $invalid_skills_home/.claude/repos/superpowers ]]
+[[ ! -e $invalid_skills_home/.claude/.ccbr-superpowers-managed ]]
+[[ -z $(find "$invalid_skills_home/.claude/skills" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]
+
 invalid_home=$tmp/invalid-home
 mkdir -p "$invalid_home/.claude/repos/superpowers"
 printf 'keep me\n' >"$invalid_home/.claude/repos/superpowers/file"

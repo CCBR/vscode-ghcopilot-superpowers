@@ -668,6 +668,7 @@ if ((configure_repo)); then preflight_repository; fi
 mkdir -p "$install_root/repos" "$skills_dir"
 
 new_checkout=0
+working_checkout=$checkout
 if [[ -e $checkout && ! -d $checkout/.git ]]; then
   fail_checkout "Existing path is not a Superpowers Git checkout: $checkout"
 elif [[ ! -d $checkout/.git ]]; then
@@ -678,24 +679,24 @@ elif [[ ! -d $checkout/.git ]]; then
   [[ -d $clone_tmp/.git ]] || fail 'The temporary Superpowers clone is not a Git checkout.'
   clone_origin=$(git -C "$clone_tmp" config --get remote.origin.url || true)
   expected_remote "$clone_origin" || fail "Unexpected Superpowers origin: ${clone_origin:-none}"
-  mv "$clone_tmp" "$checkout"
+  working_checkout=$clone_tmp
   new_checkout=1
 fi
 
-origin=$(git -C "$checkout" config --get remote.origin.url || true)
+origin=$(git -C "$working_checkout" config --get remote.origin.url || true)
 expected_remote "$origin" || fail_checkout "Unexpected Superpowers origin: ${origin:-none}"
-if [[ -n $(git -C "$checkout" status --porcelain --untracked-files=all 2>/dev/null) ]]; then
+if [[ -n $(git -C "$working_checkout" status --porcelain --untracked-files=all 2>/dev/null) ]]; then
   fail_checkout "Superpowers checkout has local changes: $checkout"
 fi
 
 printf 'Fetching Superpowers tags...\n'
-git -C "$checkout" fetch --quiet --tags --force origin
-git -C "$checkout" rev-parse --verify --quiet "refs/tags/$version^{commit}" >/dev/null ||
+git -C "$working_checkout" fetch --quiet --tags --force origin
+git -C "$working_checkout" rev-parse --verify --quiet "refs/tags/$version^{commit}" >/dev/null ||
   fail "Superpowers tag $version was not found; the current installation was not changed."
 
 stage=$(mktemp -d "${TMPDIR:-/tmp}/ccbr-superpowers.XXXXXX")
 temporary_paths+=("$stage")
-git -C "$checkout" archive --format=tar "refs/tags/$version" skills | tar -xf - -C "$stage"
+git -C "$working_checkout" archive --format=tar "refs/tags/$version" skills | tar -xf - -C "$stage"
 
 valid_skills=()
 shopt -s nullglob
@@ -745,9 +746,11 @@ if ((${#conflicts[@]})); then
   fi
 fi
 
-git -C "$checkout" checkout --detach --quiet "refs/tags/$version"
-current=$(installed_version) || fail_checkout "Could not verify the checked-out version $version."
+git -C "$working_checkout" checkout --detach --quiet "refs/tags/$version"
+current=$(git -C "$working_checkout" describe --tags --exact-match 2>/dev/null) ||
+  fail_checkout "Could not verify the checked-out version $version."
 [[ $current == "$version" ]] || fail_checkout "Expected $version after checkout, found $current."
+if ((new_checkout)); then mv "$working_checkout" "$checkout"; fi
 
 backup_dir=
 if ((${#conflicts[@]})); then
