@@ -14,6 +14,7 @@ replace_conflicts=0
 show_status=0
 list_versions=0
 show_verify=0
+dry_run=0
 configure_repo=1
 version_requested=0
 start='<!-- CCBR-SUPERPOWERS-START -->'
@@ -44,6 +45,7 @@ Options:
       --status            Report the installed version and managed skills
       --list-versions     List available upstream versions without making changes
       --verify            Verify installation and policy health without making changes
+      --dry-run           Preview installer changes without modifying files or Git state
       --replace-conflicts Back up conflicting files/directories without prompting
       --no-agents-policy  Do not update AGENTS.md with the CCBR policy
   -h, --help              Show this help
@@ -74,6 +76,10 @@ while (($#)); do
       show_verify=1
       shift
       ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
     --replace-conflicts)
       replace_conflicts=1
       shift
@@ -97,6 +103,9 @@ done
 ((!show_status || !list_versions)) || fail '--status and --list-versions cannot be used together.'
 if ((show_verify && (show_status || list_versions || version_requested || replace_conflicts))); then
   fail '--verify cannot be combined with --status, --list-versions, --version, or --replace-conflicts.'
+fi
+if ((dry_run && (show_status || list_versions || show_verify))); then
+  fail '--dry-run cannot be combined with --status, --list-versions, or --verify.'
 fi
 
 command -v git >/dev/null 2>&1 || fail 'Git is required.'
@@ -220,6 +229,205 @@ skill_frontmatter_status() {
     }
   ' "$file"
 }
+
+write_policy() {
+  cat <<'POLICY'
+<!-- CCBR-SUPERPOWERS-START -->
+## CCBR Superpowers integration
+
+Approved Superpowers skills may be available as personal Agent Skills under `~/.claude/skills/`. The local installation is managed separately. This repository policy determines whether a skill should be invoked; discovery alone never requires its use. Once deliberately selected, follow the chosen skill's workflow.
+
+If a requested Superpowers skill is unavailable, tell the user to run the CCBR Superpowers installer from anywhere inside this repository:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s --
+```
+
+Do not install Superpowers automatically. Do not create or use repository-local links to a machine-specific Superpowers installation.
+
+## Superpowers usage policy
+
+Superpowers is an optional workflow framework, not the default way to perform tasks.
+
+Optimize for **correctness, speed, and token efficiency**. For routine work, prefer direct repository inspection, implementation, and targeted validation using the normal available tools.
+
+Do NOT invoke a Superpowers skill merely because it appears relevant. For small, routine, low-risk, or well-understood tasks, work directly without Superpowers. Examples include documentation, minor configuration, obvious bug fixes, mechanical refactors, routine dependency updates, simple tests, code explanation, and repository exploration.
+
+Consider Superpowers only when the task is sufficiently **large, non-routine, ambiguous, or risky** that a structured workflow is likely to materially improve the result. Good candidates include large features, significant architectural changes, complex bugs with unclear causes, risky refactors, critical infrastructure or interfaces, and explicit user requests. Use the smallest subset of Superpowers necessary; do not automatically chain every workflow.
+
+## TDD policy
+
+**Do NOT use the Superpowers TDD workflow by default.** Reserve it for substantial behavioral changes, complex business or scientific logic, critical shared code, meaningful regression risk, or an explicit user request. Documentation, formatting, simple configuration, obvious fixes, minor refactors, and routine maintenance need only the minimum targeted validation appropriate to the change.
+
+Before invoking any Superpowers workflow, ask whether the task is large, non-routine, ambiguous, or potentially code-breaking; whether the workflow will materially improve correctness or reduce risk; and whether that benefit is proportional to its cost. If not, work directly.
+<!-- CCBR-SUPERPOWERS-END -->
+POLICY
+}
+
+preview_installation() {
+  local preview_checkout current='' origin dirty source_skills dir file name target value policy_state manifest_expected manifest_actual
+  local expected_policy existing_policy writable_parent
+  local -a preview_skills=() planned_actions=() correct_items=() previous_skills=()
+
+  printf 'DRY RUN: no repository or personal installation changes will be made.\n'
+
+  writable_parent=$install_root
+  while [[ ! -e $writable_parent ]]; do writable_parent=${writable_parent%/*}; done
+  [[ -d $writable_parent && -w $writable_parent ]] ||
+    fail "Personal installation parent is not writable: $writable_parent"
+  if ((configure_repo)); then
+    [[ -w $repo ]] || fail "Repository is not writable for an AGENTS.md update: $repo"
+  fi
+
+  if [[ -e $checkout && ! -d $checkout/.git ]]; then
+    fail_checkout "Existing path is not a Superpowers Git checkout: $checkout"
+  elif [[ -d $checkout/.git ]]; then
+    origin=$(git -C "$checkout" config --get remote.origin.url || true)
+    expected_remote "$origin" || fail_checkout "Unexpected Superpowers origin: ${origin:-none}"
+    dirty=$(GIT_OPTIONAL_LOCKS=0 git -C "$checkout" status --porcelain --untracked-files=all 2>/dev/null || printf 'unreadable')
+    [[ -z $dirty ]] || fail_checkout "Superpowers checkout has local changes: $checkout"
+    current=$(installed_version || true)
+  else
+    planned_actions+=("Clone Superpowers into $checkout.")
+  fi
+  planned_actions+=("Fetch upstream Superpowers tags.")
+
+  printf 'Inspecting requested version %s from %s...\n' "$version" "$repo_url"
+  preview_checkout=$(mktemp -d "${TMPDIR:-/tmp}/ccbr-superpowers-preview.XXXXXX")
+  temporary_paths+=("$preview_checkout")
+  git clone --quiet --no-checkout "$repo_url" "$preview_checkout" ||
+    fail "Could not inspect Superpowers from $repo_url. Check network access and the repository URL."
+  git -C "$preview_checkout" rev-parse --verify --quiet "refs/tags/$version^{commit}" >/dev/null ||
+    fail "Superpowers tag $version was not found; no changes were made."
+  git -C "$preview_checkout" checkout --detach --quiet "refs/tags/$version"
+  source_skills=$preview_checkout/skills
+
+  shopt -s nullglob
+  for dir in "$source_skills"/*; do
+    [[ -d $dir && ! -L $dir ]] || continue
+    name=${dir##*/}
+    file=$dir/SKILL.md
+    if [[ -f $file && -r $file ]] && skill_frontmatter_status "$name" "$file"; then
+      preview_skills+=("$name")
+    else
+      warn "Skipping invalid skill in $version: $name"
+    fi
+  done
+  ((${#preview_skills[@]})) || fail "No valid skills were found in Superpowers $version."
+
+  if [[ $current == "$version" ]]; then
+    correct_items+=("Checkout is already at $version.")
+  else
+    planned_actions+=("Check out $version.")
+  fi
+
+  while IFS= read -r name; do
+    [[ -n $name ]] && previous_skills+=("$name")
+  done < <(manifest_skills)
+
+  for name in "${preview_skills[@]}"; do
+    target=$skills_dir/$name
+    if [[ -L $target ]]; then
+      value=$(readlink "$target")
+      if [[ $value == "../repos/superpowers/skills/$name" || $value == "$checkout/skills/$name" ]] &&
+        [[ -f $target/SKILL.md ]]; then
+        correct_items+=("Managed skill link is already correct: $name.")
+      else
+        planned_actions+=("Repair managed skill link: $name.")
+      fi
+    elif [[ -e $target ]]; then
+      if ((replace_conflicts)); then
+        planned_actions+=("Back up conflicting skill entry: $target.")
+        planned_actions+=("Create managed skill link: $name.")
+      else
+        fail "Conflict at $target requires --replace-conflicts; no changes were made."
+      fi
+    else
+      planned_actions+=("Create managed skill link: $name.")
+    fi
+  done
+
+  for name in "${previous_skills[@]}"; do
+    if ! list_contains_preview "$name" "${preview_skills[@]}"; then
+      target=$skills_dir/$name
+      if [[ -L $target ]]; then
+        value=$(readlink "$target")
+        if [[ $value == "../repos/superpowers/skills/$name" || $value == "$checkout/skills/$name" ]]; then
+          planned_actions+=("Remove obsolete managed skill link: $name.")
+        fi
+      fi
+    fi
+  done
+
+  manifest_expected=$(printf 'version=%s\n' "$version"; printf 'skill=%s\n' "${preview_skills[@]}")
+  manifest_actual=$(cat "$manifest" 2>/dev/null || true)
+  if [[ $manifest_actual == "$manifest_expected" ]]; then
+    correct_items+=("Managed-skills manifest is already correct for $version.")
+  else
+    planned_actions+=("Write managed-skills manifest for $version (${#preview_skills[@]} skills).")
+  fi
+
+  if ((configure_repo)); then
+    agents=$repo/AGENTS.md
+    if [[ -e $agents || -L $agents ]]; then
+      [[ -f $agents && ! -L $agents && -r $agents ]] ||
+        fail "AGENTS.md must be a readable regular file (not a symlink): $agents"
+      if awk -v s="$start" -v e="$end" '
+        { line=$0; sub(/\r$/, "", line) }
+        line == s { a++; if (a != 1 || b) exit 1 }
+        line == e { b++; if (b != 1 || a != 1) exit 1 }
+        END { if (a != b || a > 1 || b > 1) exit 1 }
+      ' "$agents"; then
+        if grep -Fq "$start" "$agents"; then
+          expected_policy=$(write_policy)
+          existing_policy=$(awk -v s="$start" -v e="$end" '
+            { line=$0; sub(/\r$/, "", line) }
+            line == s { inside=1 }
+            inside { print line }
+            line == e { exit }
+          ' "$agents")
+          if [[ -n $expected_policy && $existing_policy == "$expected_policy" ]]; then
+            policy_state=current
+          else
+            policy_state=update
+          fi
+        else
+          policy_state=update
+        fi
+      else
+        fail 'AGENTS.md has incomplete, repeated, or out-of-order CCBR markers; resolve manually.'
+      fi
+    else
+      policy_state=update
+    fi
+    if [[ $policy_state == current ]]; then
+      correct_items+=("Repository policy is already current: $agents.")
+    else
+      planned_actions+=("Update repository policy: $agents.")
+    fi
+  else
+    correct_items+=('Repository policy update is disabled by --no-agents-policy.')
+  fi
+
+  printf 'Planned changes:\n'
+  if ((${#planned_actions[@]})); then printf '  %s\n' "${planned_actions[@]}"; else printf '  None.\n'; fi
+  printf 'Already correct:\n'
+  if ((${#correct_items[@]})); then printf '  %s\n' "${correct_items[@]}"; else printf '  None.\n'; fi
+}
+
+list_contains_preview() {
+  local wanted=$1 candidate
+  shift
+  for candidate in "$@"; do [[ $candidate == "$wanted" ]] && return 0; done
+  return 1
+}
+
+if ((dry_run)); then
+  preview_installation
+  exit 0
+fi
 
 verify_installation() {
   local healthy=0 warnings=0 errors=0 current commit origin dirty manifest_version='' line name target value
@@ -583,39 +791,7 @@ configure_repository() {
   policy=$(mktemp "$repo/.ccbr-superpowers-policy.XXXXXX")
   output=$(mktemp "$repo/.AGENTS.md.XXXXXX")
   temporary_paths+=("$policy" "$output")
-  cat > "$policy" <<'POLICY'
-<!-- CCBR-SUPERPOWERS-START -->
-## CCBR Superpowers integration
-
-Approved Superpowers skills may be available as personal Agent Skills under `~/.claude/skills/`. The local installation is managed separately. This repository policy determines whether a skill should be invoked; discovery alone never requires its use. Once deliberately selected, follow the chosen skill's workflow.
-
-If a requested Superpowers skill is unavailable, tell the user to run the CCBR Superpowers installer from anywhere inside this repository:
-
-```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
-  | bash -s --
-```
-
-Do not install Superpowers automatically. Do not create or use repository-local links to a machine-specific Superpowers installation.
-
-## Superpowers usage policy
-
-Superpowers is an optional workflow framework, not the default way to perform tasks.
-
-Optimize for **correctness, speed, and token efficiency**. For routine work, prefer direct repository inspection, implementation, and targeted validation using the normal available tools.
-
-Do NOT invoke a Superpowers skill merely because it appears relevant. For small, routine, low-risk, or well-understood tasks, work directly without Superpowers. Examples include documentation, minor configuration, obvious bug fixes, mechanical refactors, routine dependency updates, simple tests, code explanation, and repository exploration.
-
-Consider Superpowers only when the task is sufficiently **large, non-routine, ambiguous, or risky** that a structured workflow is likely to materially improve the result. Good candidates include large features, significant architectural changes, complex bugs with unclear causes, risky refactors, critical infrastructure or interfaces, and explicit user requests. Use the smallest subset of Superpowers necessary; do not automatically chain every workflow.
-
-## TDD policy
-
-**Do NOT use the Superpowers TDD workflow by default.** Reserve it for substantial behavioral changes, complex business or scientific logic, critical shared code, meaningful regression risk, or an explicit user request. Documentation, formatting, simple configuration, obvious fixes, minor refactors, and routine maintenance need only the minimum targeted validation appropriate to the change.
-
-Before invoking any Superpowers workflow, ask whether the task is large, non-routine, ambiguous, or potentially code-breaking; whether the workflow will materially improve correctness or reduce risk; and whether that benefit is proportional to its cost. If not, work directly.
-<!-- CCBR-SUPERPOWERS-END -->
-POLICY
+  write_policy > "$policy"
 
   if [[ -f $agents ]]; then
     if ((has_policy)); then

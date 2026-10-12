@@ -103,6 +103,18 @@ curl -fsSL \
 
 This read-only command marks the installed version when one exists. It does not create or change the personal checkout, skill links, managed-skills manifest, or `AGENTS.md`; use `--version TAG` to install or switch versions.
 
+Preview an installation or update before making changes:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s -- --dry-run
+```
+
+The preview separates planned changes from already-correct state and covers the checkout, requested version, managed skill links, conflict backups, obsolete-link removal, manifest, and repository policy. It may inspect the configured upstream repository in a temporary directory, which is removed on exit, but it does not change the target repository or personal installation. Conditions that would block a real run return nonzero.
+
+`--dry-run` works with normal installer options. For example, preview a version switch with `--dry-run --version TAG`, skip repository policy inspection with `--dry-run --no-agents-policy`, or preview approved conflict backups with `--dry-run --replace-conflicts`.
+
 ## Existing skills and conflicts
 
 For every valid skill in the selected release, the installer:
@@ -166,6 +178,7 @@ All repository-owned content outside the markers is preserved. The installed Sup
     --status            Report the installed version and managed links
     --list-versions     List available upstream versions without making changes
     --verify            Verify installation and policy health without making changes
+    --dry-run           Preview installer changes without modifying files or Git state
     --replace-conflicts Back up conflicting files/directories without prompting
     --no-agents-policy  Do not update AGENTS.md with the CCBR policy
 -h, --help              Show help

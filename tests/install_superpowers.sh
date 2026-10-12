@@ -49,6 +49,51 @@ git -C "$tmp" init -q project
 mkdir -p "$tmp/project/nested/directory"
 printf 'Project instructions\n' >"$tmp/project/AGENTS.md"
 
+dry_home=$tmp/dry-home
+project_status_before=$(git -C "$tmp/project" status --porcelain=v1 --untracked-files=all)
+agents_checksum_before=$(cksum "$tmp/project/AGENTS.md")
+(cd "$tmp/project/nested/directory" &&
+  HOME=$dry_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
+    bash "$installer" --dry-run) >"$tmp/out"
+assert_contains "$tmp/out" 'DRY RUN: no repository or personal installation changes will be made.'
+assert_contains "$tmp/out" 'Planned changes:'
+assert_contains "$tmp/out" "Clone Superpowers into $dry_home/.claude/repos/superpowers."
+assert_contains "$tmp/out" 'Fetch upstream Superpowers tags.'
+assert_contains "$tmp/out" 'Check out v6.4.2.'
+assert_contains "$tmp/out" 'Create managed skill link: brainstorming.'
+assert_contains "$tmp/out" 'Create managed skill link: writing-plans.'
+assert_contains "$tmp/out" 'Write managed-skills manifest for v6.4.2 (2 skills).'
+assert_contains "$tmp/out" "Update repository policy: $tmp/project/AGENTS.md."
+assert_contains "$tmp/out" 'Already correct:'
+[[ ! -e $dry_home/.claude ]]
+[[ $(cksum "$tmp/project/AGENTS.md") == "$agents_checksum_before" ]]
+[[ $(git -C "$tmp/project" status --porcelain=v1 --untracked-files=all) == "$project_status_before" ]]
+
+invalid_version_bin=$tmp/invalid-version-bin
+mkdir -p "$invalid_version_bin"
+cat >"$invalid_version_bin/git" <<EOF
+#!/usr/bin/env bash
+if [[ \$1 == clone ]]; then printf 'unexpected clone\n' >&2; exit 99; fi
+exec $(command -v git) "\$@"
+EOF
+chmod +x "$invalid_version_bin/git"
+if (cd "$tmp/project" &&
+  PATH="$invalid_version_bin:$PATH" HOME=$dry_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
+    bash "$installer" --dry-run --version 'bad tag') >"$tmp/out" 2>&1; then
+  printf 'Expected invalid dry-run version failure\n' >&2
+  exit 1
+fi
+assert_contains "$tmp/out" 'Invalid version tag: bad tag'
+! grep -Fq 'unexpected clone' "$tmp/out"
+
+stdin_dry_home=$tmp/stdin-dry-home
+(cd "$tmp/project/nested/directory" &&
+  HOME=$stdin_dry_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
+    bash -s -- --dry-run <"$installer") >"$tmp/out"
+assert_contains "$tmp/out" 'DRY RUN: no repository or personal installation changes will be made.'
+assert_contains "$tmp/out" "Update repository policy: $tmp/project/AGENTS.md."
+[[ ! -e $stdin_dry_home/.claude ]]
+
 list_home=$tmp/list-home
 (cd "$tmp/project" &&
   HOME=$list_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
@@ -131,6 +176,14 @@ printf 'Shared instructions\n' >"$tmp/shared-agents.md"
 ln -s "$tmp/shared-agents.md" "$tmp/linked-policy/AGENTS.md"
 if (cd "$tmp/linked-policy" &&
   HOME=$linked_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
+    bash "$installer" --dry-run) >"$tmp/out" 2>&1; then
+  printf 'Expected symlinked AGENTS.md dry-run failure\n' >&2
+  exit 1
+fi
+assert_contains "$tmp/out" 'AGENTS.md must be a readable regular file (not a symlink)'
+[[ ! -e $linked_home/.claude ]]
+if (cd "$tmp/linked-policy" &&
+  HOME=$linked_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
     bash "$installer") >"$tmp/out" 2>&1; then
   printf 'Expected symlinked AGENTS.md failure\n' >&2
   exit 1
@@ -185,6 +238,51 @@ assert_contains "$tmp/out" 'Verification summary:'
 assert_contains "$tmp/out" '8 healthy, 0 warnings, 0 errors.'
 find "$install_root" "$tmp/project" -printf '%p|%y|%m|%s|%T@|%l\n' | sort >"$tmp/verify-state-after"
 cmp -s "$tmp/verify-state-before" "$tmp/verify-state-after"
+
+find "$install_root" "$tmp/project" -printf '%p|%y|%m|%s|%T@|%l\n' | sort >"$tmp/dry-state-before"
+run --dry-run >"$tmp/out"
+assert_contains "$tmp/out" 'Checkout is already at v6.4.2.'
+assert_contains "$tmp/out" 'Managed skill link is already correct: brainstorming.'
+assert_contains "$tmp/out" 'Managed skill link is already correct: writing-plans.'
+assert_contains "$tmp/out" 'Managed-skills manifest is already correct for v6.4.2.'
+assert_contains "$tmp/out" 'Repository policy is already current:'
+find "$install_root" "$tmp/project" -printf '%p|%y|%m|%s|%T@|%l\n' | sort >"$tmp/dry-state-after"
+cmp -s "$tmp/dry-state-before" "$tmp/dry-state-after"
+
+run --dry-run --no-agents-policy >"$tmp/out"
+assert_contains "$tmp/out" 'Repository policy update is disabled by --no-agents-policy.'
+
+cp "$tmp/project/AGENTS.md" "$tmp/agents-dry-good"
+sed -i 's/## CCBR Superpowers integration/## Stale CCBR Superpowers integration/' "$tmp/project/AGENTS.md"
+run --dry-run >"$tmp/out"
+assert_contains "$tmp/out" "Update repository policy: $tmp/project/AGENTS.md."
+cp "$tmp/agents-dry-good" "$tmp/project/AGENTS.md"
+
+reject run --dry-run --version v9.9.9
+assert_contains "$tmp/out" 'Superpowers tag v9.9.9 was not found; no changes were made.'
+
+printf 'dirty\n' >"$install_root/repos/superpowers/dry-run-dirty"
+reject run --dry-run
+assert_contains "$tmp/out" "Superpowers checkout has local changes: $install_root/repos/superpowers"
+rm "$install_root/repos/superpowers/dry-run-dirty"
+
+printf '%s\n' '<!-- CCBR-SUPERPOWERS-START -->' 'incomplete policy' >"$tmp/project/AGENTS.md"
+reject run --dry-run
+assert_contains "$tmp/out" 'AGENTS.md has incomplete, repeated, or out-of-order CCBR markers'
+cmp -s "$tmp/project/AGENTS.md" <(printf '%s\n' '<!-- CCBR-SUPERPOWERS-START -->' 'incomplete policy')
+cp "$tmp/agents-dry-good" "$tmp/project/AGENTS.md"
+
+rm "$install_root/skills/writing-plans"
+mkdir "$install_root/skills/writing-plans"
+printf 'personal content\n' >"$install_root/skills/writing-plans/notes.txt"
+reject run --dry-run
+assert_contains "$tmp/out" 'requires --replace-conflicts; no changes were made'
+run --dry-run --replace-conflicts >"$tmp/out"
+assert_contains "$tmp/out" "Back up conflicting skill entry: $install_root/skills/writing-plans."
+assert_contains "$tmp/out" 'Create managed skill link: writing-plans.'
+[[ -f $install_root/skills/writing-plans/notes.txt && ! -L $install_root/skills/writing-plans ]]
+rm -rf "$install_root/skills/writing-plans"
+ln -s ../repos/superpowers/skills/writing-plans "$install_root/skills/writing-plans"
 
 rm "$install_root/skills/brainstorming"
 reject run --verify
@@ -334,6 +432,17 @@ backup=$(find "$install_root/skills" -maxdepth 1 -type d -name '.superpowers-bac
 rm -rf "$upstream/skills/writing-plans"
 add_skill systematic-debugging
 commit_tag update v6.4.3
+find "$install_root" "$tmp/project" -printf '%p|%y|%m|%s|%T@|%l\n' | sort >"$tmp/upgrade-dry-before"
+run --dry-run --version v6.4.3 >"$tmp/out"
+assert_contains "$tmp/out" 'Check out v6.4.3.'
+assert_contains "$tmp/out" 'Managed skill link is already correct: brainstorming.'
+assert_contains "$tmp/out" 'Create managed skill link: systematic-debugging.'
+assert_contains "$tmp/out" 'Remove obsolete managed skill link: writing-plans.'
+assert_contains "$tmp/out" 'Write managed-skills manifest for v6.4.3 (2 skills).'
+find "$install_root" "$tmp/project" -printf '%p|%y|%m|%s|%T@|%l\n' | sort >"$tmp/upgrade-dry-after"
+cmp -s "$tmp/upgrade-dry-before" "$tmp/upgrade-dry-after"
+[[ $(git -C "$install_root/repos/superpowers" describe --tags --exact-match) == v6.4.2 ]]
+
 run --version v6.4.3 >"$tmp/out"
 assert_contains "$tmp/out" 'Superpowers v6.4.3: 1 created, 0 repaired, 1 already correct, 1 obsolete removed.'
 [[ $(git -C "$install_root/repos/superpowers" describe --tags --exact-match) == v6.4.3 ]]
