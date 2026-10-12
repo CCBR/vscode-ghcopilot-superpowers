@@ -135,6 +135,8 @@ The installer creates or refreshes only the content between these markers:
 <!-- CCBR-SUPERPOWERS-END -->
 ```
 
+Before changing the personal Superpowers checkout or skill links, the installer verifies that `AGENTS.md` is a readable regular file, its CCBR markers are complete and correctly ordered, and the repository can hold a temporary policy file. If this preflight fails, no personal Superpowers files are changed. `--no-agents-policy` skips this policy preflight because `AGENTS.md` will not be updated.
+
 All repository-owned content outside the markers is preserved. The installed Superpowers version is intentionally absent from `AGENTS.md`, so a personal version update does not require changes across repositories.
 
 ## Options

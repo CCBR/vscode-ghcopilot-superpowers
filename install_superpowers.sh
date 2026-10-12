@@ -171,6 +171,27 @@ expected_remote() {
   esac
 }
 
+preflight_repository() {
+  local probe
+  agents=$repo/AGENTS.md
+  has_policy=0
+  if [[ -e $agents || -L $agents ]]; then
+    [[ -f $agents && ! -L $agents && -r $agents ]] ||
+      fail "AGENTS.md must be a readable regular file (not a symlink): $agents"
+    has_policy=$(awk -v s="$start" -v e="$end" '
+      { line=$0; sub(/\r$/, "", line) }
+      line == s { a++; if (a != 1 || b) exit 1 }
+      line == e { b++; if (b != 1 || a != 1) exit 1 }
+      END { if (a != b || a > 1 || b > 1) exit 1; print a+0 }
+    ' "$agents") || fail 'AGENTS.md has incomplete, repeated, or out-of-order CCBR markers; resolve manually.'
+  fi
+  probe=$(mktemp "$repo/.ccbr-superpowers-preflight.XXXXXX") ||
+    fail "Cannot create a temporary policy file in repository: $repo"
+  rm -f "$probe"
+}
+
+if ((configure_repo)); then preflight_repository; fi
+
 mkdir -p "$install_root/repos" "$skills_dir"
 
 new_checkout=0
@@ -304,20 +325,7 @@ file_mode() {
 }
 
 configure_repository() {
-  local requested=$1 repo agents has_policy policy output mode inside line newline marker
-  repo=$(git -C "$requested" rev-parse --show-toplevel 2>/dev/null) || fail "Not inside a Git working tree: $requested"
-  repo=$(cd "$repo" && pwd -P)
-  agents=$repo/AGENTS.md
-  has_policy=0
-  if [[ -e $agents || -L $agents ]]; then
-    [[ -f $agents && ! -L $agents && -r $agents ]] || fail "AGENTS.md must be a readable regular file (not a symlink): $agents"
-    has_policy=$(awk -v s="$start" -v e="$end" '
-      { line=$0; sub(/\r$/, "", line) }
-      line == s { a++; if (a != 1 || b) exit 1 }
-      line == e { b++; if (b != 1 || a != 1) exit 1 }
-      END { if (a != b || a > 1 || b > 1) exit 1; print a+0 }
-    ' "$agents") || fail 'AGENTS.md has incomplete, repeated, or out-of-order CCBR markers; resolve manually.'
-  fi
+  local policy output mode inside line newline marker
 
   policy=$(mktemp "$repo/.ccbr-superpowers-policy.XXXXXX")
   output=$(mktemp "$repo/.AGENTS.md.XXXXXX")
@@ -383,7 +391,7 @@ POLICY
   fi
 }
 
-if ((configure_repo)); then configure_repository "$repo"; fi
+if ((configure_repo)); then configure_repository; fi
 
 printf 'Superpowers %s: %d created, %d repaired, %d already correct, %d obsolete removed.\n' \
   "$version" "$created" "$repaired" "$correct" "$removed"

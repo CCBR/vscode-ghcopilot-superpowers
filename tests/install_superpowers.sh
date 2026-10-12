@@ -87,6 +87,37 @@ fi
 assert_contains "$tmp/out" "Back up anything you need, delete $invalid_home/.claude/repos/superpowers, and try again."
 [[ -f $invalid_home/.claude/repos/superpowers/file ]]
 
+git -C "$tmp" init -q malformed-policy
+malformed_home=$tmp/malformed-home
+printf '%s\n' '<!-- CCBR-SUPERPOWERS-START -->' 'incomplete policy' >"$tmp/malformed-policy/AGENTS.md"
+if (cd "$tmp/malformed-policy" &&
+  HOME=$malformed_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+    bash "$installer") >"$tmp/out" 2>&1; then
+  printf 'Expected malformed AGENTS.md failure\n' >&2
+  exit 1
+fi
+assert_contains "$tmp/out" 'AGENTS.md has incomplete, repeated, or out-of-order CCBR markers'
+[[ ! -e $malformed_home/.claude ]]
+
+git -C "$tmp" init -q linked-policy
+linked_home=$tmp/linked-home
+printf 'Shared instructions\n' >"$tmp/shared-agents.md"
+ln -s "$tmp/shared-agents.md" "$tmp/linked-policy/AGENTS.md"
+if (cd "$tmp/linked-policy" &&
+  HOME=$linked_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+    bash "$installer") >"$tmp/out" 2>&1; then
+  printf 'Expected symlinked AGENTS.md failure\n' >&2
+  exit 1
+fi
+assert_contains "$tmp/out" 'AGENTS.md must be a readable regular file (not a symlink)'
+[[ ! -e $linked_home/.claude ]]
+
+opt_out_home=$tmp/opt-out-home
+(cd "$tmp/malformed-policy" &&
+  HOME=$opt_out_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+    bash "$installer" --no-agents-policy) >"$tmp/out"
+[[ -L $opt_out_home/.claude/skills/brainstorming ]]
+
 reject run_in "$tmp"
 assert_contains "$tmp/out" 'Run this installer inside a Git working tree.'
 [[ ! -e $install_root ]]
