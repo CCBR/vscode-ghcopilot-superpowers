@@ -21,7 +21,7 @@ run_in() {
   local directory=$1
   shift
   (cd "$directory" &&
-    HOME=$home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=${CCBR_SUPERPOWERS_HOSTNAME:-NCI-TEST} \
+    HOME=$home CCBR_SUPERPOWERS_REPO_URL=$upstream \
       bash "$installer" "$@")
 }
 add_skill() {
@@ -46,7 +46,7 @@ printf 'Project instructions\n' >"$tmp/project/AGENTS.md"
 truncated_home=$tmp/truncated-home
 sed '$d' "$installer" | (
   cd "$tmp/project"
-  HOME=$truncated_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+  HOME=$truncated_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
     bash -s --
 )
 [[ ! -e $truncated_home/.claude ]]
@@ -67,7 +67,7 @@ exec $(command -v git) "\$@"
 EOF
 chmod +x "$fake_bin/git"
 if (cd "$tmp/project" &&
-  PATH="$fake_bin:$PATH" HOME=$failed_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+  PATH="$fake_bin:$PATH" HOME=$failed_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
     bash "$installer") >"$tmp/out" 2>&1; then
   printf 'Expected simulated clone failure\n' >&2
   exit 1
@@ -79,7 +79,7 @@ invalid_home=$tmp/invalid-home
 mkdir -p "$invalid_home/.claude/repos/superpowers"
 printf 'keep me\n' >"$invalid_home/.claude/repos/superpowers/file"
 if (cd "$tmp/project" &&
-  HOME=$invalid_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+  HOME=$invalid_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
     bash "$installer") >"$tmp/out" 2>&1; then
   printf 'Expected invalid checkout failure\n' >&2
   exit 1
@@ -91,7 +91,7 @@ git -C "$tmp" init -q malformed-policy
 malformed_home=$tmp/malformed-home
 printf '%s\n' '<!-- CCBR-SUPERPOWERS-START -->' 'incomplete policy' >"$tmp/malformed-policy/AGENTS.md"
 if (cd "$tmp/malformed-policy" &&
-  HOME=$malformed_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+  HOME=$malformed_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
     bash "$installer") >"$tmp/out" 2>&1; then
   printf 'Expected malformed AGENTS.md failure\n' >&2
   exit 1
@@ -104,7 +104,7 @@ linked_home=$tmp/linked-home
 printf 'Shared instructions\n' >"$tmp/shared-agents.md"
 ln -s "$tmp/shared-agents.md" "$tmp/linked-policy/AGENTS.md"
 if (cd "$tmp/linked-policy" &&
-  HOME=$linked_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+  HOME=$linked_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
     bash "$installer") >"$tmp/out" 2>&1; then
   printf 'Expected symlinked AGENTS.md failure\n' >&2
   exit 1
@@ -114,7 +114,7 @@ assert_contains "$tmp/out" 'AGENTS.md must be a readable regular file (not a sym
 
 opt_out_home=$tmp/opt-out-home
 (cd "$tmp/malformed-policy" &&
-  HOME=$opt_out_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+  HOME=$opt_out_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
     bash "$installer" --no-agents-policy) >"$tmp/out"
 [[ -L $opt_out_home/.claude/skills/brainstorming ]]
 
@@ -125,7 +125,7 @@ assert_contains "$tmp/out" 'Run this installer inside a Git working tree.'
 run() { run_in "$tmp/project/nested/directory" "$@"; }
 
 run >"$tmp/out"
-assert_contains "$tmp/out" 'Detected environment: GFE.'
+assert_contains "$tmp/out" "Using personal Superpowers directory: $install_root"
 assert_contains "$tmp/out" 'Superpowers v6.4.2: 2 created, 0 repaired, 0 already correct, 0 obsolete removed.'
 [[ $(git -C "$install_root/repos/superpowers" describe --tags --exact-match) == v6.4.2 ]]
 [[ $(readlink "$install_root/skills/brainstorming") == ../repos/superpowers/skills/brainstorming ]]
@@ -133,6 +133,10 @@ assert_contains "$tmp/out" 'Superpowers v6.4.2: 2 created, 0 repaired, 0 already
 assert_contains "$tmp/project/AGENTS.md" 'Project instructions'
 assert_contains "$tmp/project/AGENTS.md" '<!-- CCBR-SUPERPOWERS-START -->'
 assert_contains "$tmp/project/AGENTS.md" '`~/.claude/skills/`'
+assert_contains "$tmp/project/AGENTS.md" 'If a requested Superpowers skill is unavailable'
+assert_contains "$tmp/project/AGENTS.md" 'https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh'
+assert_contains "$tmp/project/AGENTS.md" 'Do not install Superpowers automatically.'
+assert_contains "$tmp/project/AGENTS.md" 'Do not create or use repository-local links'
 [[ ! -e $tmp/project/nested/directory/AGENTS.md ]]
 
 run >"$tmp/out"
@@ -195,9 +199,9 @@ run_in "$tmp/no-policy" --no-agents-policy >"$tmp/out"
 
 unknown_home=$tmp/unknown-home
 (cd "$tmp/project" &&
-  HOME=$unknown_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=elsewhere \
+  HOME=$unknown_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
     bash "$installer" --no-agents-policy) >"$tmp/out" 2>&1
-assert_contains "$tmp/out" 'Unrecognized host; installing safely under HOME'
+assert_contains "$tmp/out" "Using personal Superpowers directory: $unknown_home/.claude"
 [[ -L $unknown_home/.claude/skills/brainstorming ]]
 
 printf 'All installer tests passed.\n'

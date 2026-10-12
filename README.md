@@ -47,13 +47,7 @@ bash install_superpowers.sh
 
 Arguments for direct GitHub execution go after `bash -s --`, as shown in the examples below.
 
-The installer recognizes these hostname patterns for reporting:
-
-- `biowulf.nih.gov` and `cnNNNN`: BioWulf
-- `*.ncifcrf.gov`: FRCE
-- `NCI-*`: GFE
-
-An unrecognized hostname is not fatal. Installation still uses the current `$HOME`, which is the source of truth for the environment-specific location.
+The installer reports the personal Superpowers directory it will use. It does not inspect the hostname because the current `$HOME` is the source of truth for the environment-specific location.
 
 ## Update or roll back
 
@@ -125,7 +119,11 @@ curl -fsSL \
   | bash -s -- --no-agents-policy
 ```
 
-The managed section says that personal Superpowers skills may be available under `~/.claude/skills/`, but their presence does not require their use. Agents should use the smallest appropriate workflow only for sufficiently large, ambiguous, non-routine, or risky tasks. The Superpowers test-driven-development workflow is not the default for small or routine work.
+The managed section says that personal Superpowers skills may be available under `~/.claude/skills/`, but their presence does not require their use. If a requested skill is unavailable, the agent tells the user to run the CCBR installer from inside the repository. It must not install Superpowers automatically or create repository-local links to a machine-specific installation.
+
+This supports moving a repository between environments. Committing `AGENTS.md` on BioWulf does not commit the personal links from the BioWulf home directory. After cloning the repository on FRCE or a GFE where Superpowers is not installed, run the installer once from inside that clone to create the personal checkout and links for that environment.
+
+Agents should use the smallest appropriate workflow only for sufficiently large, ambiguous, non-routine, or risky tasks. The Superpowers test-driven-development workflow is not the default for small or routine work.
 
 The installer creates or refreshes only the content between these markers:
 
@@ -153,7 +151,6 @@ Environment variables intended for tests or approved mirrors:
 
 - `CCBR_SUPERPOWERS_REPO_URL`: override the upstream repository URL.
 - `CCBR_SUPERPOWERS_INSTALL_ROOT`: override `~/.claude`.
-- `CCBR_SUPERPOWERS_HOSTNAME`: override hostname detection.
 
 ## Development
 

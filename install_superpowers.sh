@@ -46,7 +46,6 @@ Options:
 Environment variables intended for testing or mirrors:
   CCBR_SUPERPOWERS_REPO_URL      Override the official upstream URL
   CCBR_SUPERPOWERS_INSTALL_ROOT  Override ~/.claude
-  CCBR_SUPERPOWERS_HOSTNAME      Override hostname detection
 EOF
 }
 
@@ -85,19 +84,6 @@ done
 command -v git >/dev/null 2>&1 || fail 'Git is required.'
 repo=$(git rev-parse --show-toplevel 2>/dev/null) || fail 'Run this installer inside a Git working tree.'
 repo=$(cd "$repo" && pwd -P)
-
-detect_site() {
-  local host
-  host=${CCBR_SUPERPOWERS_HOSTNAME:-}
-  if [[ -z $host ]]; then host=$(hostname -f 2>/dev/null || hostname 2>/dev/null || true); fi
-  host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
-  case "$host" in
-    biowulf.nih.gov|cn[0-9][0-9][0-9][0-9]) printf 'BioWulf' ;;
-    *.ncifcrf.gov) printf 'FRCE' ;;
-    nci-*) printf 'GFE' ;;
-    *) printf 'unknown' ;;
-  esac
-}
 
 installed_version() {
   [[ -d $checkout/.git ]] || return 1
@@ -143,12 +129,7 @@ fi
 command -v tar >/dev/null 2>&1 || fail 'tar is required.'
 git check-ref-format "refs/tags/$version" >/dev/null 2>&1 || fail "Invalid version tag: $version"
 
-site=$(detect_site)
-if [[ $site == unknown ]]; then
-  warn "Unrecognized host; installing safely under HOME ($HOME)."
-else
-  printf 'Detected environment: %s.\n' "$site"
-fi
+printf 'Using personal Superpowers directory: %s\n' "$install_root"
 
 normalize_url() {
   local value=$1
@@ -335,6 +316,16 @@ configure_repository() {
 ## CCBR Superpowers integration
 
 Approved Superpowers skills may be available as personal Agent Skills under `~/.claude/skills/`. The local installation is managed separately. This repository policy determines whether a skill should be invoked; discovery alone never requires its use. Once deliberately selected, follow the chosen skill's workflow.
+
+If a requested Superpowers skill is unavailable, tell the user to run the CCBR Superpowers installer from anywhere inside this repository:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
+  | bash -s --
+```
+
+Do not install Superpowers automatically. Do not create or use repository-local links to a machine-specific Superpowers installation.
 
 ## Superpowers usage policy
 
