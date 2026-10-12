@@ -273,8 +273,15 @@ preview_installation() {
 
   printf 'DRY RUN: no repository or personal installation changes will be made.\n'
 
-  writable_parent=$install_root
-  while [[ ! -e $writable_parent ]]; do writable_parent=${writable_parent%/*}; done
+  if [[ $install_root == /* ]]; then
+    writable_parent=$install_root
+  else
+    writable_parent=$PWD/$install_root
+  fi
+  while [[ ! -e $writable_parent ]]; do
+    writable_parent=${writable_parent%/*}
+    [[ -n $writable_parent ]] || writable_parent=/
+  done
   [[ -d $writable_parent && -w $writable_parent ]] ||
     fail "Personal installation parent is not writable: $writable_parent"
   if ((configure_repo)); then

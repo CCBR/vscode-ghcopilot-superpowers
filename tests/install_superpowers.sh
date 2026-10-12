@@ -94,6 +94,17 @@ assert_contains "$tmp/out" 'DRY RUN: no repository or personal installation chan
 assert_contains "$tmp/out" "Update repository policy: $tmp/project/AGENTS.md."
 [[ ! -e $stdin_dry_home/.claude ]]
 
+if ! (cd "$tmp/project" &&
+  HOME=$dry_home CCBR_SUPERPOWERS_INSTALL_ROOT=relative-install \
+    CCBR_SUPERPOWERS_REPO_URL=$upstream \
+    timeout 5 bash "$installer" --dry-run --no-agents-policy) >"$tmp/out" 2>&1; then
+  printf 'Expected dry-run to handle a relative install root without hanging\n' >&2
+  cat "$tmp/out" >&2
+  exit 1
+fi
+assert_contains "$tmp/out" 'Clone Superpowers into relative-install/repos/superpowers.'
+[[ ! -e $tmp/project/relative-install ]]
+
 list_home=$tmp/list-home
 (cd "$tmp/project" &&
   HOME=$list_home CCBR_SUPERPOWERS_REPO_URL=$upstream \
