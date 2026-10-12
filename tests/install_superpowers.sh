@@ -52,6 +52,41 @@ sed '$d' "$installer" | (
 [[ ! -e $truncated_home/.claude ]]
 [[ $(cat "$tmp/project/AGENTS.md") == 'Project instructions' ]]
 
+fake_bin=$tmp/fake-bin
+failed_home=$tmp/failed-home
+mkdir -p "$fake_bin"
+cat >"$fake_bin/git" <<EOF
+#!/usr/bin/env bash
+if [[ \$1 == clone ]]; then
+  destination=\${!#}
+  mkdir -p "\$destination"
+  printf 'partial clone\n' >"\$destination/incomplete"
+  exit 1
+fi
+exec $(command -v git) "\$@"
+EOF
+chmod +x "$fake_bin/git"
+if (cd "$tmp/project" &&
+  PATH="$fake_bin:$PATH" HOME=$failed_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+    bash "$installer") >"$tmp/out" 2>&1; then
+  printf 'Expected simulated clone failure\n' >&2
+  exit 1
+fi
+[[ ! -e $failed_home/.claude/repos/superpowers ]]
+[[ -z $(find "$failed_home/.claude/repos" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]
+
+invalid_home=$tmp/invalid-home
+mkdir -p "$invalid_home/.claude/repos/superpowers"
+printf 'keep me\n' >"$invalid_home/.claude/repos/superpowers/file"
+if (cd "$tmp/project" &&
+  HOME=$invalid_home CCBR_SUPERPOWERS_REPO_URL=$upstream CCBR_SUPERPOWERS_HOSTNAME=NCI-TEST \
+    bash "$installer") >"$tmp/out" 2>&1; then
+  printf 'Expected invalid checkout failure\n' >&2
+  exit 1
+fi
+assert_contains "$tmp/out" "Back up anything you need, delete $invalid_home/.claude/repos/superpowers, and try again."
+[[ -f $invalid_home/.claude/repos/superpowers/file ]]
+
 reject run_in "$tmp"
 assert_contains "$tmp/out" 'Run this installer inside a Git working tree.'
 [[ ! -e $install_root ]]
@@ -74,6 +109,16 @@ assert_contains "$tmp/out" '0 created, 0 repaired, 2 already correct, 0 obsolete
 run --status >"$tmp/out"
 assert_contains "$tmp/out" 'Superpowers v6.4.2 is installed'
 assert_contains "$tmp/out" '2 managed skills available'
+
+git -C "$install_root/repos/superpowers" remote set-url origin "$tmp/wrong-origin"
+reject run
+assert_contains "$tmp/out" "Back up anything you need, delete $install_root/repos/superpowers, and try again."
+git -C "$install_root/repos/superpowers" remote set-url origin "$upstream"
+
+printf 'local change\n' >"$install_root/repos/superpowers/local-change"
+reject run
+assert_contains "$tmp/out" "Back up anything you need, delete $install_root/repos/superpowers, and try again."
+rm "$install_root/repos/superpowers/local-change"
 
 ln -sfn "$tmp/missing" "$install_root/skills/brainstorming"
 run >"$tmp/out"

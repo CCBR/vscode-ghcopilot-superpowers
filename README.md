@@ -77,6 +77,8 @@ curl -fsSL \
 
 If the requested tag does not exist, the active checkout remains unchanged. The installer refuses to switch versions when the checkout has local changes or its `origin` is not the official `obra/superpowers` repository.
 
+If the existing checkout is invalid, has the wrong origin, has local changes, or cannot be verified after a version switch, the installer stops and asks you to back up anything needed, delete `~/.claude/repos/superpowers`, and try again. The installer never deletes that directory for you. Deleting it discards any local changes inside it.
+
 Check the installed version and managed links with:
 
 ```bash

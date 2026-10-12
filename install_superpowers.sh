@@ -19,6 +19,11 @@ temporary_paths=()
 
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 warn() { printf 'Warning: %s\n' "$*" >&2; }
+fail_checkout() {
+  printf 'Error: %s\n' "$1" >&2
+  printf 'Back up anything you need, delete %s, and try again.\n' "$checkout" >&2
+  exit 1
+}
 cleanup() {
   local path
   for path in "${temporary_paths[@]}"; do rm -rf "$path"; done
@@ -170,17 +175,23 @@ mkdir -p "$install_root/repos" "$skills_dir"
 
 new_checkout=0
 if [[ -e $checkout && ! -d $checkout/.git ]]; then
-  fail "Existing path is not a Superpowers Git checkout: $checkout"
+  fail_checkout "Existing path is not a Superpowers Git checkout: $checkout"
 elif [[ ! -d $checkout/.git ]]; then
+  clone_tmp=$(mktemp -d "$install_root/repos/.superpowers-clone.XXXXXX")
+  temporary_paths+=("$clone_tmp")
   printf 'Cloning Superpowers into %s...\n' "$checkout"
-  git clone --quiet "$repo_url" "$checkout"
+  git clone --quiet "$repo_url" "$clone_tmp"
+  [[ -d $clone_tmp/.git ]] || fail 'The temporary Superpowers clone is not a Git checkout.'
+  clone_origin=$(git -C "$clone_tmp" config --get remote.origin.url || true)
+  expected_remote "$clone_origin" || fail "Unexpected Superpowers origin: ${clone_origin:-none}"
+  mv "$clone_tmp" "$checkout"
   new_checkout=1
 fi
 
 origin=$(git -C "$checkout" config --get remote.origin.url || true)
-expected_remote "$origin" || fail "Unexpected Superpowers origin: ${origin:-none}"
+expected_remote "$origin" || fail_checkout "Unexpected Superpowers origin: ${origin:-none}"
 if [[ -n $(git -C "$checkout" status --porcelain --untracked-files=all 2>/dev/null) ]]; then
-  fail "Superpowers checkout has local changes; resolve them before changing versions: $checkout"
+  fail_checkout "Superpowers checkout has local changes: $checkout"
 fi
 
 printf 'Fetching Superpowers tags...\n'
@@ -247,8 +258,8 @@ if ((${#conflicts[@]})); then
 fi
 
 git -C "$checkout" checkout --detach --quiet "refs/tags/$version"
-current=$(installed_version) || fail "Could not verify the checked-out version $version."
-[[ $current == "$version" ]] || fail "Expected $version after checkout, found $current."
+current=$(installed_version) || fail_checkout "Could not verify the checked-out version $version."
+[[ $current == "$version" ]] || fail_checkout "Expected $version after checkout, found $current."
 
 backup_dir=
 if ((${#conflicts[@]})); then
