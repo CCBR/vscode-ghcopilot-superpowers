@@ -276,6 +276,11 @@ assert_contains "$tmp/out" 'Superpowers v6.4.2: 2 created, 0 repaired, 0 already
 [[ -f $install_root/skills/brainstorming/SKILL.md ]]
 assert_contains "$tmp/project/AGENTS.md" 'Project instructions'
 assert_contains "$tmp/project/AGENTS.md" '<!-- CCBR-SUPERPOWERS-START -->'
+assert_contains "$tmp/project/AGENTS.md" '<!-- superpowers version: v6.4.2 -->'
+installer_repo=$(cd "$(dirname "$installer")" && pwd)
+repo_commit=$(git -C "$installer_repo" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
+assert_contains "$tmp/project/AGENTS.md" "<!-- vscode_ghcopilot_superpowers commit: $repo_commit -->"
+assert_contains "$tmp/project/AGENTS.md" '<!-- generated_at:'
 assert_contains "$tmp/project/AGENTS.md" '`~/.claude/skills/`'
 assert_contains "$tmp/project/AGENTS.md" 'If a requested Superpowers skill is unavailable'
 assert_contains "$tmp/project/AGENTS.md" 'https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh'

@@ -1,4 +1,7 @@
 <!-- CCBR-SUPERPOWERS-START -->
+<!-- superpowers version: v6.4.2 -->
+<!-- vscode_ghcopilot_superpowers commit: 90fbdfc -->
+<!-- generated_at: 2026-10-13T00:00:00Z -->
 ## CCBR Superpowers integration
 
 Approved Superpowers skills may be available as personal Agent Skills under `~/.claude/skills/`. The local installation is managed separately. This repository policy determines whether a skill should be invoked; discovery alone never requires its use. Once deliberately selected, follow the chosen skill's workflow.

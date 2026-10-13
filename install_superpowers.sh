@@ -111,6 +111,7 @@ fi
 command -v git >/dev/null 2>&1 || fail 'Git is required.'
 repo=$(git rev-parse --show-toplevel 2>/dev/null) || fail 'Run this installer inside a Git working tree.'
 repo=$(cd "$repo" && pwd -P)
+installer_repo=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 
 installed_version() {
   [[ -d $checkout/.git ]] || return 1
@@ -230,9 +231,37 @@ skill_frontmatter_status() {
   ' "$file"
 }
 
+normalize_policy_for_compare() {
+  local line
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line == '<!-- generated_at: '* ]] && continue
+    printf '%s\n' "$line"
+  done
+}
+
 write_policy() {
+  local superpowers_version
+  local vscode_commit
+  local generated_at
+
+  if git -C "$checkout" rev-parse --git-dir >/dev/null 2>&1; then
+    superpowers_version=$(git -C "$checkout" describe --tags --exact-match 2>/dev/null || printf '%s' "${version:-unknown}")
+  else
+    superpowers_version=${version:-unknown}
+  fi
+
+  vscode_commit=$(git -C "$installer_repo" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
+  generated_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  printf '%s
+' '<!-- CCBR-SUPERPOWERS-START -->'
+  printf '%s
+' "<!-- superpowers version: $superpowers_version -->"
+  printf '%s
+' "<!-- vscode_ghcopilot_superpowers commit: $vscode_commit -->"
+  printf '%s
+' "<!-- generated_at: $generated_at -->"
   cat <<'POLICY'
-<!-- CCBR-SUPERPOWERS-START -->
 ## CCBR Superpowers integration
 
 Approved Superpowers skills may be available as personal Agent Skills under `~/.claude/skills/`. The local installation is managed separately. This repository policy determines whether a skill should be invoked; discovery alone never requires its use. Once deliberately selected, follow the chosen skill's workflow.
@@ -240,9 +269,7 @@ Approved Superpowers skills may be available as personal Agent Skills under `~/.
 If a requested Superpowers skill is unavailable, tell the user to run the CCBR Superpowers installer from anywhere inside this repository:
 
 ```bash
-curl -fsSL \
-  https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh \
-  | bash -s --
+curl -fsSL   https://raw.githubusercontent.com/CCBR/vscode-ghcopilot-superpowers/main/install_superpowers.sh   | bash -s --
 ```
 
 Do not install Superpowers automatically. Do not create or use repository-local links to a machine-specific Superpowers installation.
@@ -257,13 +284,16 @@ Do NOT invoke a Superpowers skill merely because it appears relevant. For small,
 
 Consider Superpowers only when the task is sufficiently **large, non-routine, ambiguous, or risky** that a structured workflow is likely to materially improve the result. Good candidates include large features, significant architectural changes, complex bugs with unclear causes, risky refactors, critical infrastructure or interfaces, and explicit user requests. Use the smallest subset of Superpowers necessary; do not automatically chain every workflow.
 
+Prefer direct execution for routine or tightly coupled work. Dispatch subagents only for genuinely independent tasks, isolated reads, or parallel validation where the saved context cost outweighs the orchestration overhead. Never auto-chain subagents for every task.
+
 ## TDD policy
 
-**Do NOT use the Superpowers TDD workflow by default.** Reserve it for substantial behavioral changes, complex business or scientific logic, critical shared code, meaningful regression risk, or an explicit user request. Documentation, formatting, simple configuration, obvious fixes, minor refactors, and routine maintenance need only the minimum targeted validation appropriate to the change.
+**Do NOT use the Superpowers TDD workflow by default.** Reserve it for substantial behavioral changes, complex business or scientific logic, critical shared code, meaningful regression risk, or an explicit user request. Documentation, formatting, simple configuration, obvious bug fixes, minor refactors, and routine maintenance need only the minimum targeted validation appropriate to the change.
 
 Before invoking any Superpowers workflow, ask whether the task is large, non-routine, ambiguous, or potentially code-breaking; whether the workflow will materially improve correctness or reduce risk; and whether that benefit is proportional to its cost. If not, work directly.
-<!-- CCBR-SUPERPOWERS-END -->
 POLICY
+  printf '%s
+' '<!-- CCBR-SUPERPOWERS-END -->'
 }
 
 preview_installation() {
@@ -394,8 +424,14 @@ preview_installation() {
             inside { print line }
             line == e { exit }
           ' "$agents")
-          if [[ -n $expected_policy && $existing_policy == "$expected_policy" ]]; then
-            policy_state=current
+          if [[ -n $expected_policy ]]; then
+            expected_policy=$(printf '%s\n' "$expected_policy" | normalize_policy_for_compare)
+            existing_policy=$(printf '%s\n' "$existing_policy" | normalize_policy_for_compare)
+            if [[ $existing_policy == "$expected_policy" ]]; then
+              policy_state=current
+            else
+              policy_state=update
+            fi
           else
             policy_state=update
           fi
